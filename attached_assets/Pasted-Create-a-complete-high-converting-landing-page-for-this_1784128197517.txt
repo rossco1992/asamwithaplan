@@ -1,0 +1,399 @@
+Create a complete, high-converting landing page for this business idea. This should include all copy, layout instructions, and wireframe details that could be handed to any developer or AI builder to create the actual page.
+
+## LANDING PAGE BLUEPRINT
+
+### 1. PAGE STRUCTURE & WIREFRAME
+
+**Above the Fold (Hero Section)**:
+- **Layout**: [Describe layout - left/right split, centered, background image, etc.]
+- **Primary Headline**: [Powerful headline that hooks attention]
+- **Subheadline**: [Supporting text that clarifies the value]
+- **Hero Image/Video**: [Detailed description for visual content]
+- **Primary CTA Button**: [Button text and styling notes]
+- **Social Proof Element**: [Customer count, testimonial quote, etc.]
+
+**Trust Indicators Strip**:
+- **Customer Logos**: [Types of companies to feature]
+- **Testimonial Quote**: [Short, impactful testimonial]
+- **Stats/Numbers**: [Key metrics that build credibility]
+
+### 2. PROBLEM/PAIN SECTION
+**Section Headline**: [How you frame the problem]
+**Pain Points** (3-4 bullets):
+- Pain Point 1: [Specific problem your audience faces]
+- Pain Point 2: [Another frustration they experience]  
+- Pain Point 3: [Cost or consequence of not solving it]
+
+**Visual Element**: [Image, diagram, or graphic that illustrates the problem]
+
+### 3. SOLUTION OVERVIEW
+**Section Headline**: [How you position your solution]
+**Value Proposition**: [Clear explanation of what you offer]
+**Key Benefits** (3-4 primary benefits):
+- Benefit 1: [What they gain]
+- Benefit 2: [What they avoid]
+- Benefit 3: [What they achieve]
+
+**Demo/Preview**: [Screenshot, video thumbnail, or product preview]
+
+### 4. HOW IT WORKS (Process Section)
+**Section Headline**: [Make it simple and clear]
+**Steps** (3-4 steps maximum):
+1. **Step 1**: [Action they take] - [Brief description]
+2. **Step 2**: [What happens next] - [Brief description]  
+3. **Step 3**: [Final outcome] - [Brief description]
+
+**Visual Treatment**: [Icons, illustrations, or process diagram]
+
+### 5. FEATURES/BENEFITS SECTION
+**Section Headline**: [Position features as benefits]
+**Feature Blocks** (3-6 features):
+- **Feature 1 Name**: [Benefit-focused title]
+  - Description: [How it helps them]
+  - Icon/Image: [Visual representation]
+- **Feature 2 Name**: [Benefit-focused title]
+  - Description: [How it helps them]
+  - Icon/Image: [Visual representation]
+[Continue pattern...]
+
+### 6. SOCIAL PROOF SECTION
+**Section Headline**: [Position social validation]
+**Testimonials** (2-3 detailed testimonials):
+- **Testimonial 1**: "[Full testimonial quote]"
+  - Name, Title, Company
+  - Photo: [Description for headshot]
+- **Testimonial 2**: "[Full testimonial quote]"
+  - Name, Title, Company  
+  - Photo: [Description for headshot]
+
+**Alternative Social Proof**:
+- Case study results
+- User-generated content examples
+- Press mentions or awards
+
+### 7. PRICING SECTION (if applicable)
+**Section Headline**: [Frame pricing positively]
+**Pricing Tiers** (1-3 options):
+- **Tier Name**: 
+  - Price: [Amount and billing period]
+  - Features: [Key features included]
+  - CTA: [Button text]
+  - Best for: [Who should choose this]
+
+### 8. FAQ SECTION
+**Section Headline**: [Address common concerns]
+**FAQs** (5-7 most important questions):
+1. **Q**: [Most common question]
+   **A**: [Clear, reassuring answer]
+2. **Q**: [Price/value concern]
+   **A**: [Address objection directly]
+[Continue with other key objections...]
+
+### 9. FINAL CTA SECTION
+**Headline**: [Create urgency or reinforce value]
+**Supporting Text**: [Remove final objections]
+**CTA Button**: [Action-oriented text]
+**Risk Reversal**: [Guarantee, trial, refund policy]
+**Secondary CTA**: [Alternative action like "Learn More"]
+
+### 10. FOOTER
+**Company Info**: [Essential contact/legal info]
+**Links**: [Key pages and resources]
+**Social Media**: [Relevant platforms]
+
+---
+
+## COPY GUIDELINES
+- **Tone**: [Match brand personality - professional, friendly, urgent, etc.]
+- **Reading Level**: [Target 8th grade reading level for accessibility]
+- **Keywords**: [Include relevant SEO keywords naturally]
+- **Scannability**: [Use bullet points, short paragraphs, clear headings]
+
+## TECHNICAL NOTES
+- **Mobile-first**: Ensure all sections work well on mobile
+- **Loading Speed**: Optimize images and minimize elements above fold
+- **A/B Testing**: Note elements that should be tested (headlines, CTAs, etc.)
+
+Base all copy and positioning on the provided market research, target audience insights, and competitive analysis.
+
+## BUSINESS CONTEXT
+
+### Idea Overview
+**Product/Service**: Wedding planner app for couples doing it themselves
+**Summary**: Skipping the wedding planner saves the $5,000 it would cost and creates a second job: roughly 200 decisions across six months. Which photographer earns the price. When invitations go out. Whether a florist's quote is fair or the budget is about to break. Checklists organize the tasks. Judgment on the money stays with two people doing this for the first time.
+
+Marrymap generates a full planning timeline from the wedding date and venue, then breaks it into weekly steps. Vendor inquiry emails draft in the couple's own voice. Competing quotes line up side by side, with flags on any item priced outside the typical range. Budget tracking connects to bank data and catches overruns before they compound. One dashboard shows what is done, what comes next, and what sits at risk, so couples approve and adjust while the coordination runs underneath.
+
+Version one covers timeline generation and vendor communication. Email integrations draft and track messages to florists, caterers, and photographers. Couples drop in the quotes that come back, and anything priced past the budget surfaces on its own. First ten couples reveal which decisions spike the sharpest anxiety, and those automate first. Day-of scheduling and seating layout wait until core planning proves out and couples trust the tool with real vendor money.
+
+Pricing runs $29 a month for a straightforward wedding and $99 for a large, complex one, against the planner's fee they skipped. Couples find it in the big wedding-planning communities, and referral is built into the calendar: each wedding sends three newly engaged friends in behind it. Venue partnerships and vendor commissions add a second revenue line. Couples who trusted it through their own wedding hand it to friends the week those friends get engaged.
+**Why Now**: The wedding planning industry is currently witnessing a transformative phase marked by significant growth and technological advancements. As of 2025, the global wedding planning market is valued at approximately $261.9 billion, expected to surge to between $500 billion and $755 billion by 2035. This growth is paralleled by a sharp increase in DIY wedding planning, driven by the financial strains of traditional wedding costs, which average $36,000 globally. With AI adoption among engaged couples nearing 36%, there's an evident shift toward utilizing technology for complex planning tasks, highlighting the opportune moment for launching an AI-driven wedding planning solution. 
+
+Technological advancements have enabled the creation of AI solutions that can handle natural-language planning workflows, a crucial development given the standardization of wedding planning tasks across timelines, budgets, and vendor interactions. Foundation models and sophisticated SaaS integrations allow for seamless automation of various planning processes, from vendor communication to quote evaluation. This offers a substantial edge over traditional methods, where complexity and vendor-side constraints often hinder effective planning. 
+
+Social and regulatory factors also play a crucial role in shaping this opportunity. The increasing demand for hyper-personalized experiences and shared decision-making reinforces the preference for accessible, AI-based planning tools. Additionally, the regulatory environment, while not specifically tailored to weddings, emphasizes transparency and data protection, offering a chance to build trust and differentiate from older platforms that may not align with current privacy standards.
+
+### Market Analysis
+**Pain Score**: icon: 🔥
+  label: Pain Score
+  score: 9
+  byline: Significant unmet need for affordable, tech-enabled wedding planning solutions.
+  pain_type: Acute
+  analyzedAt: 2026-06-29T22:08:08.057Z
+  pain_trends: Increasing
+  score_reason: The high cost of traditional planners and decision overload create significant user pain, compounded by inadequate existing solutions.
+  pain_frequency: 
+    score: 9
+    reason: Users frequently face planning challenges due to high costs and complexity.
+  pain_intensity: 
+    score: 8
+    reason: The stress and frustration from planning without support are intense.
+  key_pain_points: [
+    High cost of traditional wedding planners ($5-15K)
+    Over 200 planning decisions causing stress
+    Inadequate current tools lacking end-to-end solutions
+    Growing DIY trend without effective support
+  ]
+  market_evidence: [
+    Reddit discussions highlight planner cost concerns
+    85% of couples share duties to avoid high fees
+    Active engagement on DIY wedding forums
+    Increased AI adoption for planning efficiency
+  ]
+  current_solutions: 
+    score: 5
+    reason: Existing platforms provide limited checklist features, falling short on comprehensive planning.
+  willingness_to_pay: 
+    score: 9
+    reason: Strong motivation to solve due to high costs and stress.
+**Opportunity Score**: icon: 💎
+  label: Opportunity Score
+  score: 9
+  byline: AI-driven wedding planning meets rising DIY demand in a booming market.
+  key_risks: [
+    High competition from established platforms
+    Potential API cost overruns
+    Need for brand trust in a sensitive market
+    Cultural diversity in wedding planning
+  ]
+  analyzedAt: 2026-06-29T22:08:04.067Z
+  score_reason: The opportunity leverages significant market growth, technological advancements, and a clear demand for cost-effective AI solutions, positioning it as a strong contender in an evolving industry landscape.
+  key_strengths: [
+    Rapidly growing $261.9B market
+    High AI adoption among couples
+    Clear unmet needs in current platforms
+    Low execution difficulty with AI tools
+  ]
+  market_timing: 
+    score: 9
+    reason: Market is expanding significantly, with AI adoption and DIY trends peaking.
+  market_potential: 
+    score: 9
+    reason: Projected market growth and high DIY engagement indicate strong demand.
+  opportunity_type: Growing Market
+  opportunity_window: Opening Up
+  competitive_advantage: 
+    score: 9
+    reason: Major platforms have not fully integrated AI, leaving room for innovation.
+  execution_feasibility: 
+    score: 6
+    reason: AI tools simplify development, but brand trust and user acquisition are challenges.
+**Market Gaps**: The wedding planning market shows significant gaps due to high demand for cost-effective, comprehensive solutions to help couples navigate the overwhelming process without spending $5-15K on traditional planners. Current platforms like The Knot and Zola only offer limited checklists and vendor directories, not the full-service orchestration many couples need. With the global wedding planning market forecasted to grow significantly, and AI usage among engaged couples on the rise, there is a momentous opportunity to launch a robust AI-driven planner.
+**Go-to-Market**: icon: 🚀
+  label: Go-To-Market
+  score: 9
+  byline: Exceptional potential with strong traction in DIY and budget-conscious wedding planning communities.
+  analyzedAt: 2026-06-29T22:07:50.112Z
+  gtm_tactics: [
+    Leverage YouTube influencers to showcase AI planning features
+    Create interactive Facebook Live Q&A sessions
+    Run targeted ads on Reddit for DIY wedding communities
+    Develop partnerships with popular wedding vendors for integrated solutions
+  ]
+  short_reason: The DIY and budget-conscious wedding segments show strong engagement and interest in AI solutions, with active communities on Reddit, Facebook, and YouTube.
+  traction_signal: Strong traction
+  audience_clusters: [
+    DIY couples planning on a budget
+    Tech-savvy engaged couples
+    Engaged millennials avoiding traditional planners
+    Wedding vendors seeking efficient solutions
+  ]
+  channels_with_signal: [
+    Reddit (1.9M+ followers across relevant subs)
+    Facebook Groups (271K+ in 'Wedding DIY UK')
+    YouTube (Jamie Wolfer's 100K+ subscriber base)
+  ]
+  early_positioning_angles: [
+    'Your AI wedding planner for a fraction of the cost'
+    'DIY your dream wedding with AI assistance'
+    'Stress-free wedding planning with AI'
+    'AI-powered planning for the modern couple'
+  ]
+
+### Business Model
+**Value Ladder**: offers: [
+      goal: Generate leads and initial engagement.
+      name: Wedding Planning Starter Kit
+      price: Free
+      stage: Bait
+      description: A personalized planning checklist and timeline generator using AI.
+      value_provided: Helps couples organize initial steps with a tailored roadmap.
+      goal: Acquire paying users through initial commitment.
+      name: Essential Planning Package
+      price: $49/month
+      stage: Frontend
+      description: Access to basic planning tools, vendor communication templates, and task management.
+      value_provided: Streamlines basic planning processes and vendor interactions at a low cost.
+      goal: Establish consistent revenue and increase user engagement.
+      name: Advanced Planning Suite
+      price: $99/month
+      stage: Middle
+      description: Includes budget tracking, quote evaluations, and AI-driven decision support.
+      value_provided: Provides comprehensive planning support with detailed financial oversight and vendor management.
+      goal: Encourage long-term relationships and increase customer lifetime value.
+      name: Premium Support & Customization
+      price: $200/month
+      stage: Continuity Program
+      description: Personalized support and custom AI planning features tailored to the couple's needs.
+      value_provided: Offers enhanced personalization and expert-level assistance to ensure a stress-free planning experience.
+      goal: Capture high-ticket sales from couples desiring unique experiences.
+      name: Ultimate Wedding Planner Package
+      price: $500-$5,000
+      stage: Backend
+      description: A one-time purchase for custom planning assistance, including venue partnerships and exclusive vendor deals.
+      value_provided: Offers a premium, tailored wedding planning experience with exclusive offers and personalized coordination.
+  ]
+  analyzedAt: 2026-06-29T22:07:59.021Z
+**Revenue Potential**: icon: 💰
+  label: Revenue Potential
+  score: $$$
+  byline: Potential to reach $1M-$10M ARR with strong SaaS offering and upsell opportunities.
+  examples: [
+    SaaS subscription: $20-$100/month
+    Freemium model with premium add-ons
+    Custom planning packages: $500–$5K
+  ]
+  analyzedAt: 2026-06-29T22:07:40.440Z
+  funding_type: Seed
+  short_reason: Subscription-based model for an underserved market with a high willingness to pay for convenience and personalization.
+  example_comps: [
+    Zola
+    The Knot
+    Minted
+    Joy
+  ]
+  business_models: [
+    Monthly SaaS subscriptions
+    Freemium with premium features
+    Commission on vendor bookings
+    Partnerships with venues
+    Data-driven upsells and customizations
+  ]
+**Execution Plan**: label: Business Classification
+  steps: [
+    Build MVP using AI and vendor APIs
+    Launch targeted ad campaigns
+    Collect user feedback for feature improvements
+    Engage with wedding bloggers for reviews
+  ]
+  actions: [
+    1. Develop MVP with AI features
+    2. Design lead magnet and launch landing page
+    3. Initiate beta testing with early adopters
+  ]
+  b2x_type: B2C
+  lead_magnet: 
+    type: Interactive Guide
+    format: Personalized planning checklist
+    delivery: Downloadable PDF and web tool
+    creation_steps: Develop a personalized checklist generator using AI
+    conversion_rate: 15%
+    core_pain_solved: Difficulty organizing initial steps
+    value_demonstration: Offers tailored initial planning roadmap
+  mvp_strategy: Develop a core AI platform that automates initial planning tasks and vendor coordination.
+  initial_offer: 
+    model: Tiered Subscription
+    price: Free tier + $49/mo premium
+    value_prop: Comprehensive planning automation
+    fulfillment: Self-service SaaS
+    conversion_rate: 12%
+  buyer_personas: [
+    Engaged couples avoiding planners
+    DIY wedding planners
+  ]
+  key_pain_points: [
+    Overwhelm from wedding planning decisions
+    High cost of traditional wedding planners
+  ]
+  success_metrics: 
+    cac: $25-30
+    churn_rate: <10%
+    pilot_conversion: 15%
+    loan_approval_time: -
+  resources_needed: 
+    team: [
+      Solo founder with AI tools
+    ]
+    budget: $0-10K
+    timeline: 2-4 weeks
+  expansion_strategy: 
+    goal: Increase market reach and vendor integrations
+    type: Vertical expansion
+    focus: Add features for cross-cultural weddings
+    dev_timeline: 6 months
+    go_to_market: Leverage existing partnerships for promotions
+    pricing_changes: Introduce enterprise plans for venue collaborations
+  traction_milestone: Achieve 10,000 paying users and 50,000 free users
+  acquisition_channels: [
+      reason: High engagement on wedding content
+      channel: Social Media Ads
+      metrics: CTR
+      frequency: Weekly
+      content_format: Video testimonials
+      implementation_steps: Create ads with AI success stories
+      reason: DIY community engagement
+      channel: Reddit
+      metrics: Subscriber growth
+      frequency: Daily
+      content_format: AMAs, discussion threads
+      implementation_steps: Engage with wedding planning subreddits
+      reason: Visual inspiration demand
+      channel: Instagram
+      metrics: Engagement rate
+      frequency: Twice a week
+      content_format: Stories and reels
+      implementation_steps: Partner with wedding influencers to showcase features
+  ]
+  risks_and_mitigation: [
+    AI accuracy in complex situations → Continuous model updates
+    Competition from established platforms → Focus on deeper AI integration
+    Data privacy concerns → Implement strong encryption and compliance measures
+  ]
+  competitive_landscape: The Knot and Zola dominate with checklists and vendor directories but lack comprehensive AI-driven planning solutions.
+**Execution Difficulty**: icon: 🛠️
+  label: Execution Difficulty
+  score: 3
+  byline: Solo-friendly build, 1-2 week MVP with AI planning tools
+  analyzedAt: 2026-06-29T22:07:43.116Z
+  mvp_timeline: 1-2 weeks using app generators for planning features and integrations with popular wedding services.
+  short_reason: Simple planning tools with existing integrations are straightforward.
+  execution_risks: [
+    Market saturation with existing planning tools
+    API cost overruns from service integrations
+    User acquisition in a competitive space
+  ]
+  timeline_estimate: 1-2wk MVP
+  technical_challenges: [
+    Integration with multiple vendor APIs
+    AI-driven personalization for planning
+    Ensuring seamless user experience across platforms
+  ]
+  non_technical_challenges: [
+    Building brand trust with couples
+    Navigating diverse cultural wedding requirements
+    Effective marketing to target audience
+  ]
+
+---
+
+Use this business context to inform all recommendations, ensuring they're specifically tailored to this opportunity and target market.
