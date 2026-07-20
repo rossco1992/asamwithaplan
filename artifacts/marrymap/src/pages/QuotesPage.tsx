@@ -82,24 +82,54 @@ interface AddQuoteFormProps {
   onCancel: () => void;
 }
 
+type InputMode = "text" | "pdf";
+
 function AddQuoteForm({ weddingId, onAdded, onCancel }: AddQuoteFormProps) {
   const [vendorName, setVendorName] = useState("");
   const [category, setCategory] = useState<VendorCategory>("catering");
+  const [inputMode, setInputMode] = useState<InputMode>("text");
   const [rawText, setRawText] = useState("");
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+
+    if (inputMode === "pdf" && !pdfFile) {
+      setError("Please select a PDF file to upload.");
+      return;
+    }
+    if (inputMode === "text" && rawText.trim().length < 10) {
+      setError("Please paste at least 10 characters of quote text.");
+      return;
+    }
+
     setLoading(true);
     try {
-      const res = await fetch(`${apiBase}/quotes`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ weddingId, vendorName, category, rawText }),
-      });
+      let res: Response;
+
+      if (inputMode === "pdf" && pdfFile) {
+        const form = new FormData();
+        form.append("weddingId", String(weddingId));
+        form.append("vendorName", vendorName);
+        form.append("category", category);
+        form.append("pdf", pdfFile);
+        res = await fetch(`${apiBase}/quotes`, {
+          method: "POST",
+          credentials: "include",
+          body: form,
+        });
+      } else {
+        res = await fetch(`${apiBase}/quotes`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ weddingId, vendorName, category, rawText }),
+        });
+      }
+
       const data = await res.json();
       if (!res.ok) {
         setError(data.error ?? "Something went wrong. Please try again.");
@@ -115,6 +145,13 @@ function AddQuoteForm({ weddingId, onAdded, onCancel }: AddQuoteFormProps) {
 
   const inputClass =
     "w-full rounded-lg border border-border bg-secondary/50 px-4 py-3 text-sm text-primary placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-colors";
+
+  const tabClass = (active: boolean) =>
+    `px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+      active
+        ? "bg-primary text-primary-foreground"
+        : "text-muted-foreground hover:text-primary"
+    }`;
 
   return (
     <motion.div
@@ -152,18 +189,81 @@ function AddQuoteForm({ weddingId, onAdded, onCancel }: AddQuoteFormProps) {
           </div>
         </div>
 
-        <div className="space-y-1.5">
-          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-            Paste quote text
-          </label>
-          <textarea
-            required
-            rows={6}
-            placeholder="Paste the vendor email or quote here — Sam will extract all line items automatically."
-            value={rawText}
-            onChange={(e) => setRawText(e.target.value)}
-            className={`${inputClass} resize-none`}
-          />
+        {/* Input mode tabs */}
+        <div className="space-y-3">
+          <div className="flex items-center gap-1 p-1 bg-secondary/50 rounded-lg w-fit">
+            <button
+              type="button"
+              className={tabClass(inputMode === "text")}
+              onClick={() => setInputMode("text")}
+            >
+              Paste text
+            </button>
+            <button
+              type="button"
+              className={tabClass(inputMode === "pdf")}
+              onClick={() => setInputMode("pdf")}
+            >
+              Upload PDF
+            </button>
+          </div>
+
+          <AnimatePresence mode="wait">
+            {inputMode === "text" ? (
+              <motion.div
+                key="text"
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.15 }}
+              >
+                <textarea
+                  rows={6}
+                  placeholder="Paste the vendor email or quote here — Sam will extract all line items automatically."
+                  value={rawText}
+                  onChange={(e) => setRawText(e.target.value)}
+                  className={`${inputClass} resize-none`}
+                />
+              </motion.div>
+            ) : (
+              <motion.div
+                key="pdf"
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.15 }}
+              >
+                <label className="flex flex-col items-center justify-center gap-3 w-full rounded-lg border-2 border-dashed border-border bg-secondary/30 hover:bg-secondary/50 transition-colors cursor-pointer px-6 py-8">
+                  <span className="text-2xl">📄</span>
+                  <div className="text-center">
+                    {pdfFile ? (
+                      <>
+                        <p className="text-sm font-medium text-primary">{pdfFile.name}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {(pdfFile.size / 1024).toFixed(0)} KB · Click to change
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-sm font-medium text-primary">Click to select a PDF</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">or drag and drop — max 10 MB</p>
+                      </>
+                    )}
+                  </div>
+                  <input
+                    type="file"
+                    accept="application/pdf"
+                    className="sr-only"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0] ?? null;
+                      setPdfFile(file);
+                      setError(null);
+                    }}
+                  />
+                </label>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         {error && (

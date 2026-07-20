@@ -5,16 +5,35 @@ import { openai } from "@workspace/integrations-openai-ai-server";
 import { eq, and } from "drizzle-orm";
 import { requireAuth } from "../middlewares/requireAuth";
 import { z } from "zod";
+import multer from "multer";
+// Import from the lib path to avoid pdf-parse's top-level test-mode side effect
+// that tries to read a local test file when `module.parent` is falsy (always true
+// in a bundled ESM entry point).
+import pdfParse from "pdf-parse/lib/pdf-parse.js";
 
 const router: IRouter = Router();
+
+// ── Multer (memory storage — PDFs not persisted) ──────────────────────────────
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype === "application/pdf") {
+      cb(null, true);
+    } else {
+      cb(new Error("Only PDF files are accepted"));
+    }
+  },
+});
 
 // ── Validation ────────────────────────────────────────────────────────────────
 
 const CreateQuoteBody = z.object({
-  weddingId: z.number().int().positive(),
+  weddingId: z.coerce.number().int().positive(),
   vendorName: z.string().min(1).max(200),
   category: z.enum(vendorCategories),
-  rawText: z.string().min(10).max(20000),
+  rawText: z.string().min(10).max(20000).optional(),
 });
 
 // ── AI parsing ────────────────────────────────────────────────────────────────
@@ -100,46 +119,91 @@ async function getVerifiedWedding(clerkUserId: string, weddingId: number) {
 
 // ── POST /api/quotes ──────────────────────────────────────────────────────────
 
-router.post("/", requireAuth, async (req, res) => {
-  const clerkUserId = (req as any).clerkUserId as string;
+// Wrap multer so file-filter/size errors become consistent JSON 4xx responses
+function uploadSingle(fieldName: string) {
+  return (req: import("express").Request, res: import("express").Response, next: import("express").NextFunction) => {
+    upload.single(fieldName)(req, res, (err) => {
+      if (!err) return next();
+      const multerError = err as import("multer").MulterError;
+      if (multerError.code === "LIMIT_FILE_SIZE") {
+        res.status(413).json({ error: "PDF exceeds the 10 MB limit. Please reduce the file size and try again." });
+      } else if (err instanceof Error && err.message === "Only PDF files are accepted") {
+        res.status(415).json({ error: "Only PDF files are accepted. Please upload a .pdf file." });
+      } else {
+        next(err);
+      }
+    });
+  };
+}
 
-  const bodyResult = CreateQuoteBody.safeParse(req.body);
-  if (!bodyResult.success) {
-    res.status(400).json({ error: "Invalid input", details: bodyResult.error.flatten() });
-    return;
-  }
-  const { weddingId, vendorName, category, rawText } = bodyResult.data;
+router.post(
+  "/",
+  requireAuth,
+  // Accept optional PDF upload; field name = "pdf"
+  uploadSingle("pdf"),
+  async (req, res) => {
+    const clerkUserId = (req as any).clerkUserId as string;
 
-  const wedding = await getVerifiedWedding(clerkUserId, weddingId);
-  if (!wedding) {
-    res.status(404).json({ error: "Wedding not found" });
-    return;
-  }
+    const bodyResult = CreateQuoteBody.safeParse(req.body);
+    if (!bodyResult.success) {
+      res.status(400).json({ error: "Invalid input", details: bodyResult.error.flatten() });
+      return;
+    }
+    const { weddingId, vendorName, category, rawText: rawTextBody } = bodyResult.data;
 
-  let parsed: Awaited<ReturnType<typeof parseQuoteWithAI>>;
-  try {
-    parsed = await parseQuoteWithAI(rawText);
-  } catch (err) {
-    console.error("[quotes] AI parsing failed", err);
-    res.status(502).json({ error: "Failed to parse quote. Please try again." });
-    return;
-  }
+    // Determine raw text: PDF upload takes priority over pasted text
+    let rawText: string;
+    if (req.file) {
+      try {
+        const pdfData = await pdfParse(req.file.buffer);
+        rawText = pdfData.text.trim();
+        if (!rawText || rawText.length < 10) {
+          res.status(422).json({ error: "Could not extract readable text from this PDF. Try pasting the quote text instead." });
+          return;
+        }
+      } catch (err) {
+        console.error("[quotes] PDF extraction failed", err);
+        res.status(422).json({ error: "Failed to read PDF. Make sure it is a text-based PDF, not a scanned image." });
+        return;
+      }
+    } else if (rawTextBody && rawTextBody.length >= 10) {
+      rawText = rawTextBody;
+    } else {
+      res.status(400).json({ error: "Provide either a PDF file or pasted quote text (at least 10 characters)." });
+      return;
+    }
 
-  const [quote] = await db
-    .insert(quotesTable)
-    .values({
-      weddingId,
-      vendorName,
-      category,
-      rawText,
-      lineItems: parsed.lineItems,
-      totalAmount: parsed.totalAmount,
-      currency: parsed.currency,
-    })
-    .returning();
+    const wedding = await getVerifiedWedding(clerkUserId, weddingId);
+    if (!wedding) {
+      res.status(404).json({ error: "Wedding not found" });
+      return;
+    }
 
-  res.status(201).json({ quote });
-});
+    let parsed: Awaited<ReturnType<typeof parseQuoteWithAI>>;
+    try {
+      parsed = await parseQuoteWithAI(rawText);
+    } catch (err) {
+      console.error("[quotes] AI parsing failed", err);
+      res.status(502).json({ error: "Failed to parse quote. Please try again." });
+      return;
+    }
+
+    const [quote] = await db
+      .insert(quotesTable)
+      .values({
+        weddingId,
+        vendorName,
+        category,
+        rawText,
+        lineItems: parsed.lineItems,
+        totalAmount: parsed.totalAmount,
+        currency: parsed.currency,
+      })
+      .returning();
+
+    res.status(201).json({ quote });
+  },
+);
 
 // ── GET /api/quotes?weddingId=:id ─────────────────────────────────────────────
 
