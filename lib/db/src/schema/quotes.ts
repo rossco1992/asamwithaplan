@@ -50,6 +50,7 @@ export const quotesTable = pgTable("quotes", {
   currency: text("currency").notNull().default("USD"),
   parsedAt: timestamp("parsed_at").defaultNow().notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  selectedAt: timestamp("selected_at"),
 });
 
 export type Quote = typeof quotesTable.$inferSelect;

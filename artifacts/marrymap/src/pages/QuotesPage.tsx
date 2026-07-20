@@ -45,6 +45,7 @@ export interface Quote {
   totalAmount: number;
   currency: string;
   createdAt: string;
+  selectedAt: string | null;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -72,6 +73,137 @@ function isOverpriced(amount: number, groupAmounts: number[]): boolean {
       ? sorted[mid]
       : (sorted[mid - 1] + sorted[mid]) / 2;
   return amount > median * 1.2;
+}
+
+// ── Budget Summary ────────────────────────────────────────────────────────────
+
+interface BudgetSummaryProps {
+  quotes: Quote[];
+  byCategory: Record<string, Quote[]>;
+  categoriesWithQuotes: VendorCategory[];
+  onToggleSelect: (quoteId: number) => void;
+  selectingId: number | null;
+}
+
+function BudgetSummary({
+  quotes,
+  byCategory,
+  categoriesWithQuotes,
+  onToggleSelect,
+  selectingId,
+}: BudgetSummaryProps) {
+  const selectedQuotes = quotes.filter((q) => q.selectedAt !== null);
+  const totalCommitted = selectedQuotes.reduce((sum, q) => sum + q.totalAmount, 0);
+  const primaryCurrency = quotes[0]?.currency ?? "USD";
+
+  const categoriesWithSelection = categoriesWithQuotes.filter(
+    (cat) => byCategory[cat]?.some((q) => q.selectedAt !== null)
+  );
+  const categoriesWithoutSelection = categoriesWithQuotes.filter(
+    (cat) => !byCategory[cat]?.some((q) => q.selectedAt !== null)
+  );
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+      className="bg-card rounded-2xl border border-border p-6 mb-8"
+    >
+      {/* Total committed */}
+      <div className="flex items-start justify-between gap-4 mb-6">
+        <div>
+          <p className="text-xs font-semibold tracking-widest uppercase text-muted-foreground mb-1">
+            Total committed spend
+          </p>
+          <p className="text-4xl font-serif text-primary">
+            {selectedQuotes.length > 0
+              ? fmt(totalCommitted, primaryCurrency)
+              : "—"}
+          </p>
+          {selectedQuotes.length === 0 && (
+            <p className="text-xs text-muted-foreground mt-1">
+              Select a vendor in each category to build your budget
+            </p>
+          )}
+          {selectedQuotes.length > 0 && categoriesWithoutSelection.length > 0 && (
+            <p className="text-xs text-muted-foreground mt-1">
+              {categoriesWithoutSelection.length} categor{categoriesWithoutSelection.length === 1 ? "y" : "ies"} still unselected
+            </p>
+          )}
+        </div>
+        {selectedQuotes.length > 0 && (
+          <div className="text-right shrink-0">
+            <p className="text-xs text-muted-foreground mb-0.5">Vendors chosen</p>
+            <p className="text-2xl font-semibold text-primary">{selectedQuotes.length}</p>
+          </div>
+        )}
+      </div>
+
+      {/* Per-category breakdown */}
+      <div className="space-y-2">
+        {categoriesWithQuotes.map((cat) => {
+          const catQuotes = byCategory[cat] ?? [];
+          const selected = catQuotes.find((q) => q.selectedAt !== null);
+          const cheapest = [...catQuotes].sort((a, b) => a.totalAmount - b.totalAmount)[0];
+
+          return (
+            <div
+              key={cat}
+              className={`flex items-center justify-between gap-3 rounded-lg px-3 py-2.5 transition-colors ${
+                selected
+                  ? "bg-primary/5 border border-primary/10"
+                  : "bg-secondary/30"
+              }`}
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <span
+                  className={`w-2 h-2 rounded-full shrink-0 ${
+                    selected ? "bg-primary" : "bg-border"
+                  }`}
+                />
+                <span className="text-xs font-medium text-primary truncate">
+                  {categoryLabels[cat]}
+                </span>
+                {selected && (
+                  <span className="text-xs text-muted-foreground truncate hidden sm:block">
+                    · {selected.vendorName}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-3 shrink-0">
+                <span
+                  className={`text-sm font-semibold ${
+                    selected ? "text-primary" : "text-muted-foreground"
+                  }`}
+                >
+                  {selected
+                    ? fmt(selected.totalAmount, selected.currency)
+                    : cheapest
+                    ? `from ${fmt(cheapest.totalAmount, cheapest.currency)}`
+                    : "—"}
+                </span>
+                {selected ? (
+                  <button
+                    type="button"
+                    disabled={selectingId === selected.id}
+                    onClick={() => onToggleSelect(selected.id)}
+                    className="text-[10px] font-semibold tracking-wider uppercase text-primary bg-primary/10 hover:bg-primary/20 px-2 py-1 rounded transition-colors disabled:opacity-50"
+                  >
+                    {selectingId === selected.id ? "…" : "✓ Selected"}
+                  </button>
+                ) : (
+                  <span className="text-[10px] font-medium text-muted-foreground/60 uppercase tracking-wider">
+                    None chosen
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </motion.div>
+  );
 }
 
 // ── Add Quote Form ────────────────────────────────────────────────────────────
@@ -291,11 +423,16 @@ interface QuoteCardProps {
   quote: Quote;
   overpriced: boolean;
   onDelete: (id: number) => void;
+  onToggleSelect: (quoteId: number) => void;
+  selectingId: number | null;
 }
 
-function QuoteCard({ quote, overpriced, onDelete }: QuoteCardProps) {
+function QuoteCard({ quote, overpriced, onDelete, onToggleSelect, selectingId }: QuoteCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  const isSelected = quote.selectedAt !== null;
+  const isSelecting = selectingId === quote.id;
 
   const handleDelete = async () => {
     if (!confirm(`Remove quote from ${quote.vendorName}?`)) return;
@@ -319,7 +456,11 @@ function QuoteCard({ quote, overpriced, onDelete }: QuoteCardProps) {
       exit={{ opacity: 0, scale: 0.97 }}
       transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
       className={`bg-card rounded-xl border p-5 flex flex-col gap-3 transition-colors ${
-        overpriced ? "border-amber-300/60" : "border-border"
+        isSelected
+          ? "border-primary/30 ring-1 ring-primary/10"
+          : overpriced
+          ? "border-amber-300/60"
+          : "border-border"
       }`}
     >
       {/* Header */}
@@ -336,9 +477,14 @@ function QuoteCard({ quote, overpriced, onDelete }: QuoteCardProps) {
           <span className="text-base font-semibold text-primary">
             {fmt(quote.totalAmount, quote.currency)}
           </span>
-          {overpriced && (
+          {overpriced && !isSelected && (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-sm text-[10px] font-semibold tracking-wider uppercase bg-amber-50 text-amber-700 border border-amber-200">
               ⚠ Above market
+            </span>
+          )}
+          {isSelected && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-sm text-[10px] font-semibold tracking-wider uppercase bg-primary/10 text-primary border border-primary/20">
+              ✓ Selected
             </span>
           )}
         </div>
@@ -394,8 +540,20 @@ function QuoteCard({ quote, overpriced, onDelete }: QuoteCardProps) {
         )}
       </AnimatePresence>
 
-      {/* Delete */}
-      <div className="flex justify-end pt-1 border-t border-border/40">
+      {/* Footer: select + delete */}
+      <div className="flex items-center justify-between pt-1 border-t border-border/40">
+        <button
+          type="button"
+          disabled={isSelecting}
+          onClick={() => onToggleSelect(quote.id)}
+          className={`text-xs font-medium transition-colors disabled:opacity-50 ${
+            isSelected
+              ? "text-primary hover:text-primary/70"
+              : "text-muted-foreground hover:text-primary"
+          }`}
+        >
+          {isSelecting ? "Updating…" : isSelected ? "✓ Selected — click to deselect" : "Select this vendor"}
+        </button>
         <button
           type="button"
           onClick={handleDelete}
@@ -411,10 +569,12 @@ function QuoteCard({ quote, overpriced, onDelete }: QuoteCardProps) {
 
 // ── Category Group ────────────────────────────────────────────────────────────
 
-function CategoryGroup({ category, quotes, onDelete }: {
+function CategoryGroup({ category, quotes, onDelete, onToggleSelect, selectingId }: {
   category: VendorCategory;
   quotes: Quote[];
   onDelete: (id: number) => void;
+  onToggleSelect: (quoteId: number) => void;
+  selectingId: number | null;
 }) {
   const amounts = quotes.map((q) => q.totalAmount);
 
@@ -450,6 +610,8 @@ function CategoryGroup({ category, quotes, onDelete }: {
               quote={q}
               overpriced={isOverpriced(q.totalAmount, amounts)}
               onDelete={onDelete}
+              onToggleSelect={onToggleSelect}
+              selectingId={selectingId}
             />
           ))}
         </AnimatePresence>
@@ -468,6 +630,7 @@ export function QuotesPage({ weddingId }: QuotesPageProps) {
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
+  const [selectingId, setSelectingId] = useState<number | null>(null);
 
   const fetchQuotes = useCallback(async () => {
     try {
@@ -496,6 +659,34 @@ export function QuotesPage({ weddingId }: QuotesPageProps) {
 
   const handleDelete = (id: number) => {
     setQuotes((prev) => prev.filter((q) => q.id !== id));
+  };
+
+  const handleToggleSelect = async (quoteId: number) => {
+    setSelectingId(quoteId);
+    try {
+      const res = await fetch(`${apiBase}/quotes/${quoteId}/select`, {
+        method: "PATCH",
+        credentials: "include",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const updated = data.quote as Quote;
+        setQuotes((prev) =>
+          prev.map((q) => {
+            // If we just selected this quote, also clear others in the same category
+            if (updated.selectedAt !== null && q.category === updated.category && q.id !== updated.id) {
+              return { ...q, selectedAt: null };
+            }
+            if (q.id === updated.id) return updated;
+            return q;
+          })
+        );
+      }
+    } catch {
+      /* best-effort */
+    } finally {
+      setSelectingId(null);
+    }
   };
 
   // Group by category, in the order they appear
@@ -550,6 +741,17 @@ export function QuotesPage({ weddingId }: QuotesPageProps) {
         )}
       </AnimatePresence>
 
+      {/* Budget summary — shown once there are quotes */}
+      {!loading && categoriesWithQuotes.length > 0 && (
+        <BudgetSummary
+          quotes={quotes}
+          byCategory={byCategory}
+          categoriesWithQuotes={categoriesWithQuotes}
+          onToggleSelect={handleToggleSelect}
+          selectingId={selectingId}
+        />
+      )}
+
       {/* Loading state */}
       {loading && (
         <div className="space-y-6 animate-pulse">
@@ -591,6 +793,8 @@ export function QuotesPage({ weddingId }: QuotesPageProps) {
               category={category}
               quotes={byCategory[category]}
               onDelete={handleDelete}
+              onToggleSelect={handleToggleSelect}
+              selectingId={selectingId}
             />
           ))}
         </div>

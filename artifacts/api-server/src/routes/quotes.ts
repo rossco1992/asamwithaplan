@@ -231,6 +231,91 @@ router.get("/", requireAuth, async (req, res) => {
   res.json({ quotes });
 });
 
+// ── PATCH /api/quotes/:id/select ─────────────────────────────────────────────
+// Toggles the selectedAt timestamp on a quote. Only one quote per category can
+// be selected at a time — selecting a new one clears any existing selection in
+// the same category.
+
+router.patch("/:id/select", requireAuth, async (req, res) => {
+  const clerkUserId = (req as any).clerkUserId as string;
+  const quoteId = parseInt(req.params["id"] as string, 10);
+
+  if (isNaN(quoteId)) {
+    res.status(400).json({ error: "Invalid quote id" });
+    return;
+  }
+
+  const users = await db
+    .select()
+    .from(usersTable)
+    .where(eq(usersTable.clerkId, clerkUserId))
+    .limit(1);
+  if (users.length === 0) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+
+  const existing = await db
+    .select()
+    .from(quotesTable)
+    .where(eq(quotesTable.id, quoteId))
+    .limit(1);
+
+  if (existing.length === 0) {
+    res.status(404).json({ error: "Quote not found" });
+    return;
+  }
+
+  const quote = existing[0];
+
+  const weddings = await db
+    .select()
+    .from(weddingsTable)
+    .where(
+      and(
+        eq(weddingsTable.id, quote.weddingId),
+        eq(weddingsTable.userId, users[0].id)
+      )
+    )
+    .limit(1);
+
+  if (weddings.length === 0) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+
+  // Toggle: if already selected, deselect; otherwise select (and clear others in same category)
+  const isSelected = quote.selectedAt !== null;
+
+  if (isSelected) {
+    // Deselect
+    const [updated] = await db
+      .update(quotesTable)
+      .set({ selectedAt: null })
+      .where(eq(quotesTable.id, quoteId))
+      .returning();
+    res.json({ quote: updated });
+  } else {
+    // Clear any existing selection in the same category for this wedding
+    await db
+      .update(quotesTable)
+      .set({ selectedAt: null })
+      .where(
+        and(
+          eq(quotesTable.weddingId, quote.weddingId),
+          eq(quotesTable.category, quote.category)
+        )
+      );
+    // Select this quote
+    const [updated] = await db
+      .update(quotesTable)
+      .set({ selectedAt: new Date() })
+      .where(eq(quotesTable.id, quoteId))
+      .returning();
+    res.json({ quote: updated });
+  }
+});
+
 // ── DELETE /api/quotes/:id ────────────────────────────────────────────────────
 
 router.delete("/:id", requireAuth, async (req, res) => {
