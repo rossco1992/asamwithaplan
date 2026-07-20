@@ -40,7 +40,7 @@ export function Features() {
               The intelligence of a professional, quiet in the background.
             </h2>
             <p className="text-lg text-muted-foreground mb-10 leading-relaxed">
-              Marrymap isn't just a checklist. It's a system designed to catch the details that normally require a $10,000 planner to notice.
+              A Sam with a plan isn't just a checklist. It's a system designed to catch the details that normally require a $10,000 planner to notice.
             </p>
             
             <div className="grid sm:grid-cols-2 gap-x-8 gap-y-12">

@@ -33,7 +33,7 @@ export function Hero() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, delay: 0.3, ease: [0.16, 1, 0.3, 1] }}
           >
-            You're planning a wedding, not taking on a second job. Marrymap is the calm, capable second pair of hands that tracks your budget, compares quotes, and builds your timeline—so you stay in control of every decision.
+            You're planning a wedding, not taking on a second job. A Sam with a plan is the calm, capable second pair of hands that tracks your budget, compares quotes, and builds your timeline—so you stay in control of every decision.
           </motion.p>
 
           <motion.div 

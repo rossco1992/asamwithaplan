@@ -24,7 +24,7 @@ export function CTA() {
           viewport={{ once: true }}
           transition={{ duration: 0.8, delay: 0.1, ease: [0.16, 1, 0.3, 1] }}
         >
-          Join the couples who are taking back their evenings and weekends. Let Marrymap handle the logistics while you focus on the decisions that matter.
+          Join the couples who are taking back their evenings and weekends. Let A Sam with a plan handle the logistics while you focus on the decisions that matter.
         </motion.p>
         
         <motion.div

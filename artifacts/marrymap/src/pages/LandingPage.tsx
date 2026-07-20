@@ -25,9 +25,9 @@ export function LandingPage() {
       
       <footer className="bg-primary text-primary-foreground py-12">
         <div className="max-w-7xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-6">
-          <div className="font-serif text-2xl tracking-tight">Marrymap.</div>
+          <div className="font-serif text-2xl tracking-tight">A Sam with a plan.</div>
           <div className="text-sm text-primary-foreground/60">
-            © {new Date().getFullYear()} Marrymap Inc. The calm approach to wedding planning.
+            © {new Date().getFullYear()} A Sam with a plan. The calm approach to wedding planning.
           </div>
         </div>
       </footer>

@@ -15,7 +15,7 @@ export function HowItWorks() {
     {
       number: "03",
       title: "Forward the emails",
-      desc: "When vendors send contracts or quotes, forward them to your Marrymap address. We extract the data."
+      desc: "When vendors send contracts or quotes, forward them to your A Sam with a plan address. We extract the data."
     },
     {
       number: "04",

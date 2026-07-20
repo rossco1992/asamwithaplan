@@ -20,7 +20,7 @@ export function Financials() {
             viewport={{ once: true }}
             transition={{ delay: 0.1 }}
           >
-            Weddings run over budget when small additions compound unseen. Marrymap brings dashboard-level financial tracking to your wedding fund.
+            Weddings run over budget when small additions compound unseen. A Sam with a plan brings dashboard-level financial tracking to your wedding fund.
           </motion.p>
         </div>
 

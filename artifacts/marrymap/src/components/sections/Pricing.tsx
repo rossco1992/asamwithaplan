@@ -11,7 +11,7 @@ export function Pricing() {
             A fraction of a planner's fee.
           </h2>
           <p className="text-lg text-muted-foreground">
-            Cancel anytime. Most couples use Marrymap for 9-12 months leading up to their wedding.
+            Cancel anytime. Most couples use A Sam with a plan for 9-12 months leading up to their wedding.
           </p>
         </div>
 
