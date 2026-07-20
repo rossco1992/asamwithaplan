@@ -8,7 +8,7 @@ import { z } from "zod";
 
 const router: IRouter = Router();
 
-const MAX_RETRIES = 3;
+const MAX_RETRIES = 10;
 
 // ── Validation ────────────────────────────────────────────────────────────────
 
