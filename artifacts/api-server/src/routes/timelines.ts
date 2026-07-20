@@ -7,6 +7,7 @@ import { requireAuth } from "../middlewares/requireAuth";
 import { z } from "zod";
 
 const router: IRouter = Router();
+
 const MAX_RETRIES = 3;
 
 // ── Validation ────────────────────────────────────────────────────────────────
@@ -67,7 +68,8 @@ async function generateAndStore(weddingId: number, weddingDate: string, city: st
     await db
       .update(weddingsTable)
       .set({ generationStatus: "failed" })
-      .where(eq(weddingsTable.id, weddingId));
+      .where(eq(weddingsTable.id, weddingId))
+      .catch((dbErr) => console.error("[timelines] failed to write failed status", weddingId, dbErr));
   }
 }
 
@@ -131,6 +133,7 @@ router.post("/:weddingId/retry", requireAuth, async (req, res) => {
     return;
   }
 
+  // Verify ownership
   const users = await db.select().from(usersTable).where(eq(usersTable.clerkId, clerkUserId)).limit(1);
   if (users.length === 0) {
     res.status(404).json({ error: "User not found" });
@@ -191,22 +194,28 @@ router.get("/:weddingId", requireAuth, async (req, res) => {
   const wedding = weddings[0];
   const status = wedding.generationStatus;
 
+  if (status === "failed") {
+    res.status(200).json({
+      status: "failed",
+      retriesRemaining: MAX_RETRIES - wedding.retryCount,
+      retriesUsed: wedding.retryCount,
+    });
+    return;
+  }
+
   if (status === "generating") {
     res.status(202).json({ status: "generating" });
     return;
   }
 
-  if (status === "failed") {
-    res.status(200).json({
-      status: "failed",
-      canRetry: wedding.retryCount < MAX_RETRIES,
-      retriesLeft: MAX_RETRIES - wedding.retryCount,
-    });
+  // Ready — return timeline
+  const timelines = await db.select().from(timelinesTable).where(eq(timelinesTable.weddingId, weddingId)).limit(1);
+  if (timelines.length === 0) {
+    // Status says ready but no row yet — treat as still generating
+    res.status(202).json({ status: "generating" });
     return;
   }
 
-  // Ready — return timeline
-  const timelines = await db.select().from(timelinesTable).where(eq(timelinesTable.weddingId, weddingId)).limit(1);
   res.json({ status: "ready", timeline: timelines[0], wedding });
 });
 

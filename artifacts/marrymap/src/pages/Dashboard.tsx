@@ -20,7 +20,7 @@ interface WeddingData { id: number; weddingDate: string; city: string; guestCoun
 type DashboardState =
   | { kind: "form" }
   | { kind: "generating"; weddingId: number }
-  | { kind: "failed"; weddingId: number; canRetry: boolean; retriesLeft: number }
+  | { kind: "failed"; weddingId: number; retriesRemaining: number }
   | { kind: "ready"; timeline: TimelineData; wedding: WeddingData };
 
 type DashboardTab = "timeline" | "quotes";
@@ -257,58 +257,6 @@ function OnboardingForm({ onSubmit }: { onSubmit: (weddingId: number) => void })
   );
 }
 
-// ── Failed state ──────────────────────────────────────────────────────────────
-
-function FailedState({ weddingId, canRetry, retriesLeft, onRetry }: {
-  weddingId: number;
-  canRetry: boolean;
-  retriesLeft: number;
-  onRetry: () => void;
-}) {
-  const [loading, setLoading] = useState(false);
-
-  const handleRetry = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`${apiBase}/timelines/${weddingId}/retry`, {
-        method: "POST",
-        credentials: "include",
-      });
-      if (res.ok) {
-        onRetry();
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="max-w-xl"
-    >
-      <p className="text-sm font-semibold tracking-widest uppercase text-red-500 mb-4">
-        Something went wrong
-      </p>
-      <h1 className="text-4xl font-serif text-primary mb-4">
-        Sam ran into a problem.
-      </h1>
-      <p className="text-muted-foreground leading-relaxed mb-8">
-        She wasn't able to build your timeline this time — this sometimes happens
-        during busy periods. {canRetry
-          ? `You can try again (${retriesLeft} attempt${retriesLeft !== 1 ? "s" : ""} remaining).`
-          : "Unfortunately you've reached the maximum number of retries. Please contact support."}
-      </p>
-      {canRetry && (
-        <Button onClick={handleRetry} disabled={loading} className="h-12 px-8">
-          {loading ? "Retrying…" : "Try again →"}
-        </Button>
-      )}
-    </motion.div>
-  );
-}
-
 // ── Generating state ──────────────────────────────────────────────────────────
 
 function GeneratingState() {
@@ -335,6 +283,73 @@ function GeneratingState() {
         She's reviewing your wedding details and mapping out every task, week by week. This usually takes under 30 seconds.
       </p>
       <TimelineSkeleton />
+    </motion.div>
+  );
+}
+
+// ── Failed state ──────────────────────────────────────────────────────────────
+
+function FailedState({ weddingId, retriesRemaining, onRetry }: { weddingId: number; retriesRemaining: number; onRetry: () => void }) {
+  const [retrying, setRetrying] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleRetry = async () => {
+    setError(null);
+    setRetrying(true);
+    try {
+      const res = await fetch(`${apiBase}/timelines/${weddingId}/retry`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? "Something went wrong. Please try again.");
+        return;
+      }
+      onRetry();
+    } catch {
+      setError("Network error. Please check your connection.");
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+      className="max-w-xl"
+    >
+      <p className="text-sm font-semibold tracking-widest uppercase text-red-500 mb-4">
+        Something went wrong
+      </p>
+      <h1 className="text-4xl md:text-5xl font-serif text-primary mb-4">
+        Sam hit a snag.
+      </h1>
+      <p className="text-muted-foreground leading-relaxed mb-8">
+        The plan couldn't be generated this time. This is usually a temporary issue — give it another try.
+      </p>
+
+      {retriesRemaining > 0 ? (
+        <>
+          {error && (
+            <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-3 mb-4">
+              {error}
+            </p>
+          )}
+          <Button onClick={handleRetry} disabled={retrying} className="h-12 px-8 text-base">
+            {retrying ? "Trying again…" : "Try again →"}
+          </Button>
+          <p className="text-xs text-muted-foreground mt-3">
+            {retriesRemaining} attempt{retriesRemaining !== 1 ? "s" : ""} remaining
+          </p>
+        </>
+      ) : (
+        <p className="text-sm text-muted-foreground bg-secondary rounded-lg px-4 py-3 border border-border">
+          No retries remaining. Please contact support if this keeps happening.
+        </p>
+      )}
     </motion.div>
   );
 }
@@ -369,14 +384,12 @@ export function Dashboard() {
 
       try {
         const res = await fetch(`${apiBase}/timelines/${weddingId}`, { credentials: "include" });
-        if (res.status === 200) {
-          const data = await res.json();
-          if (data.status === "ready") {
-            setState({ kind: "ready", timeline: data.timeline, wedding: data.wedding });
-          } else if (data.status === "failed") {
-            setState({ kind: "failed", weddingId, canRetry: data.canRetry, retriesLeft: data.retriesLeft });
-          }
-        } else if (res.status === 202) {
+        const data = await res.json();
+        if (data.status === "ready") {
+          setState({ kind: "ready", timeline: data.timeline, wedding: data.wedding });
+        } else if (data.status === "failed") {
+          setState({ kind: "failed", weddingId, retriesRemaining: data.retriesRemaining ?? 3 });
+        } else if (data.status === "generating") {
           setState({ kind: "generating", weddingId });
         }
       } catch { /* best-effort */ }
@@ -394,14 +407,13 @@ export function Dashboard() {
     const poll = async () => {
       try {
         const res = await fetch(`${apiBase}/timelines/${weddingId}`, { credentials: "include" });
-        if (res.status === 200) {
-          const data = await res.json();
-          if (data.status === "ready") {
-            setState({ kind: "ready", timeline: data.timeline, wedding: data.wedding });
-          } else if (data.status === "failed") {
-            setState({ kind: "failed", weddingId, canRetry: data.canRetry, retriesLeft: data.retriesLeft });
-          }
+        const data = await res.json();
+        if (data.status === "ready") {
+          setState({ kind: "ready", timeline: data.timeline, wedding: data.wedding });
+        } else if (data.status === "failed") {
+          setState({ kind: "failed", weddingId, retriesRemaining: data.retriesRemaining ?? 3 });
         }
+        // "generating" — keep polling
       } catch { /* keep polling */ }
     };
 
@@ -411,6 +423,10 @@ export function Dashboard() {
 
   const handleFormSubmit = useCallback((weddingId: number) => {
     localStorage.setItem("sam_wedding_id", String(weddingId));
+    setState({ kind: "generating", weddingId });
+  }, []);
+
+  const handleRetrySuccess = useCallback((weddingId: number) => {
     setState({ kind: "generating", weddingId });
   }, []);
 
@@ -459,9 +475,8 @@ export function Dashboard() {
             <motion.div key="failed" exit={{ opacity: 0 }}>
               <FailedState
                 weddingId={state.weddingId}
-                canRetry={state.canRetry}
-                retriesLeft={state.retriesLeft}
-                onRetry={() => setState({ kind: "generating", weddingId: state.weddingId })}
+                retriesRemaining={state.retriesRemaining}
+                onRetry={() => handleRetrySuccess(state.weddingId)}
               />
             </motion.div>
           )}
