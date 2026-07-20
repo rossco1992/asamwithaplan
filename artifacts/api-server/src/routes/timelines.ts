@@ -48,7 +48,7 @@ async function generateAndStore(weddingId: number, weddingDate: string, city: st
     const completion = await openai.chat.completions.create({
       model: "gpt-5-nano",
       response_format: { type: "json_object" },
-      max_completion_tokens: 8192,
+      max_completion_tokens: 2500,
       messages: [
         { role: "system", content: buildSystemPrompt() },
         { role: "user", content: buildUserPrompt(weddingDate, city, guestCount, style) },
