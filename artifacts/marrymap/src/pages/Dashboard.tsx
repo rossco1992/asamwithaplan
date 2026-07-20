@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useUser, useClerk } from "@clerk/react";
 import { Button } from "@/components/ui/button";
 import { motion, AnimatePresence } from "framer-motion";
+import { QuotesPage } from "./QuotesPage";
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 const apiBase = basePath ? `${basePath}/api` : "/api";
@@ -20,6 +21,8 @@ type DashboardState =
   | { kind: "form" }
   | { kind: "generating"; weddingId: number }
   | { kind: "ready"; timeline: TimelineData; wedding: WeddingData };
+
+type DashboardTab = "timeline" | "quotes";
 
 // ── Priority badge ────────────────────────────────────────────────────────────
 
@@ -289,6 +292,7 @@ export function Dashboard() {
   const { user, isLoaded } = useUser();
   const { signOut } = useClerk();
   const [state, setState] = useState<DashboardState>({ kind: "form" });
+  const [activeTab, setActiveTab] = useState<DashboardTab>("timeline");
 
   // JIT-provision DB user + load existing timeline on mount
   useEffect(() => {
@@ -397,18 +401,61 @@ export function Dashboard() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
             >
-              <div className="mb-10">
+              {/* Wedding summary + tab bar */}
+              <div className="mb-8">
                 <p className="text-sm font-semibold tracking-widest uppercase text-accent mb-3">
                   Your plan
                 </p>
                 <h1 className="text-4xl font-serif text-primary">
                   {state.wedding.city} · {new Date(state.wedding.weddingDate + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}
                 </h1>
-                <p className="text-muted-foreground mt-2">
+                <p className="text-muted-foreground mt-2 mb-8">
                   {state.timeline.tasks.length} weeks · {state.wedding.guestCount} guests · {state.wedding.style}
                 </p>
+
+                {/* Tabs */}
+                <div className="flex gap-1 border-b border-border">
+                  {(["timeline", "quotes"] as DashboardTab[]).map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => setActiveTab(tab)}
+                      className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px capitalize ${
+                        activeTab === tab
+                          ? "border-primary text-primary"
+                          : "border-transparent text-muted-foreground hover:text-primary"
+                      }`}
+                    >
+                      {tab === "timeline" ? "Timeline" : "Vendor Quotes"}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <TimelineView timeline={state.timeline} wedding={state.wedding} />
+
+              <AnimatePresence mode="wait">
+                {activeTab === "timeline" && (
+                  <motion.div
+                    key="timeline-tab"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.25 }}
+                  >
+                    <TimelineView timeline={state.timeline} wedding={state.wedding} />
+                  </motion.div>
+                )}
+                {activeTab === "quotes" && (
+                  <motion.div
+                    key="quotes-tab"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.25 }}
+                  >
+                    <QuotesPage weddingId={state.wedding.id} />
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </motion.div>
           )}
         </AnimatePresence>
