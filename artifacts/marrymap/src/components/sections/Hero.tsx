@@ -13,7 +13,7 @@ export function Hero() {
             transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
           >
             <span className="inline-block py-1 px-3 rounded-full bg-secondary text-secondary-foreground text-xs font-semibold tracking-widest uppercase mb-8">
-              The anti-stress wedding planner
+              Meet Sam — your AI wedding planner
             </span>
           </motion.div>
           
@@ -33,7 +33,7 @@ export function Hero() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, delay: 0.3, ease: [0.16, 1, 0.3, 1] }}
           >
-            You're planning a wedding, not taking on a second job. A Sam with a plan is the calm, capable second pair of hands that tracks your budget, compares quotes, and builds your timeline—so you stay in control of every decision.
+            You're planning a wedding, not taking on a second job. Sam is an AI wedding planner who tracks your budget, compares vendor quotes, and builds your week-by-week timeline—so you get the calm expertise of a $10,000 planner, without the $10,000.
           </motion.p>
 
           <motion.div 
