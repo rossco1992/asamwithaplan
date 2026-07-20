@@ -22,16 +22,23 @@ const GenerateTimelineBody = z.object({
 // ── System prompt (kept tight — under 300 tokens) ────────────────────────────
 
 function buildSystemPrompt(): string {
-  return `You are a wedding planning assistant. Return ONLY valid JSON with no prose.
-Output a JSON object: { "weeks": [...] }
-Each week: { "weekLabel": string, "phase": string, "tasks": [{ "title": string, "priority": "urgent"|"this-week"|"upcoming" }] }
+  return `You are a wedding planning assistant. Return ONLY valid JSON with no prose or markdown.
+Output exactly: { "weeks": [ ...entries ] }
+Each entry: { "weekLabel": string, "phase": string, "tasks": [{ "title": string, "priority": "urgent"|"this-week"|"upcoming" }] }
 phases: "12+ months out" | "6–12 months out" | "3–6 months out" | "final month"
-Rules: 2–4 tasks per week. weekLabel format: "Week of [Month Day]" relative to wedding. Cover full planning arc from today to wedding day. No prose, no markdown, only JSON.`;
+STRICT LIMITS — you MUST respect these or the output will be rejected:
+- Maximum 24 entries total across all phases.
+- For "12+ months out": 4 entries max, use monthly labels like "Month 12", "Month 10", "Month 8", "Month 7".
+- For "6–12 months out": 8 entries max, use labels like "6 months out", "5 months out", etc.
+- For "3–6 months out": 8 entries max, use labels like "12 weeks out", "10 weeks out", etc.
+- For "final month": 4 entries max, use labels like "4 weeks out", "3 weeks out", "2 weeks out", "Week of wedding".
+- 2–3 tasks per entry (not 4).
+- No prose, no markdown. Close all JSON brackets. Output must be complete valid JSON.`;
 }
 
 function buildUserPrompt(weddingDate: string, city: string, guestCount: number, style: string): string {
   const today = new Date().toISOString().split("T")[0];
-  return `Wedding: ${weddingDate} in ${city}. Guests: ${guestCount}. Style: ${style}. Today: ${today}. Generate the full week-by-week timeline.`;
+  return `Wedding: ${weddingDate} in ${city}. Guests: ${guestCount}. Style: ${style}. Today: ${today}. Generate a concise timeline — max 24 entries, 2–3 tasks each. Keep it short enough that the full JSON fits in your response.`;
 }
 
 // ── Background LLM generation ─────────────────────────────────────────────────
@@ -52,6 +59,11 @@ async function generateAndStore(weddingId: number, weddingDate: string, city: st
     console.log(`[timelines] tokens — prompt: ${usage?.prompt_tokens}, completion: ${usage?.completion_tokens}, total: ${usage?.total_tokens}`);
 
     const raw = completion.choices[0]?.message?.content ?? "{}";
+    const finishReason = completion.choices[0]?.finish_reason;
+    if (finishReason === "length") {
+      console.error(`[timelines] output truncated (finish_reason=length) for wedding ${weddingId} — prompt tightening needed`);
+      throw new Error("Model output was truncated — reduce max_completion_tokens or prompt size");
+    }
     const parsed = JSON.parse(raw) as { weeks?: TimelineWeek[] };
     const weeks: TimelineWeek[] = parsed.weeks ?? [];
 
