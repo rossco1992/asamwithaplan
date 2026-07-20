@@ -20,6 +20,7 @@ interface WeddingData { id: number; weddingDate: string; city: string; guestCoun
 type DashboardState =
   | { kind: "form" }
   | { kind: "generating"; weddingId: number }
+  | { kind: "failed"; weddingId: number; canRetry: boolean; retriesLeft: number }
   | { kind: "ready"; timeline: TimelineData; wedding: WeddingData };
 
 type DashboardTab = "timeline" | "quotes";
@@ -256,6 +257,58 @@ function OnboardingForm({ onSubmit }: { onSubmit: (weddingId: number) => void })
   );
 }
 
+// ── Failed state ──────────────────────────────────────────────────────────────
+
+function FailedState({ weddingId, canRetry, retriesLeft, onRetry }: {
+  weddingId: number;
+  canRetry: boolean;
+  retriesLeft: number;
+  onRetry: () => void;
+}) {
+  const [loading, setLoading] = useState(false);
+
+  const handleRetry = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${apiBase}/timelines/${weddingId}/retry`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (res.ok) {
+        onRetry();
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="max-w-xl"
+    >
+      <p className="text-sm font-semibold tracking-widest uppercase text-red-500 mb-4">
+        Something went wrong
+      </p>
+      <h1 className="text-4xl font-serif text-primary mb-4">
+        Sam ran into a problem.
+      </h1>
+      <p className="text-muted-foreground leading-relaxed mb-8">
+        She wasn't able to build your timeline this time — this sometimes happens
+        during busy periods. {canRetry
+          ? `You can try again (${retriesLeft} attempt${retriesLeft !== 1 ? "s" : ""} remaining).`
+          : "Unfortunately you've reached the maximum number of retries. Please contact support."}
+      </p>
+      {canRetry && (
+        <Button onClick={handleRetry} disabled={loading} className="h-12 px-8">
+          {loading ? "Retrying…" : "Try again →"}
+        </Button>
+      )}
+    </motion.div>
+  );
+}
+
 // ── Generating state ──────────────────────────────────────────────────────────
 
 function GeneratingState() {
@@ -318,7 +371,11 @@ export function Dashboard() {
         const res = await fetch(`${apiBase}/timelines/${weddingId}`, { credentials: "include" });
         if (res.status === 200) {
           const data = await res.json();
-          setState({ kind: "ready", timeline: data.timeline, wedding: data.wedding });
+          if (data.status === "ready") {
+            setState({ kind: "ready", timeline: data.timeline, wedding: data.wedding });
+          } else if (data.status === "failed") {
+            setState({ kind: "failed", weddingId, canRetry: data.canRetry, retriesLeft: data.retriesLeft });
+          }
         } else if (res.status === 202) {
           setState({ kind: "generating", weddingId });
         }
@@ -339,7 +396,11 @@ export function Dashboard() {
         const res = await fetch(`${apiBase}/timelines/${weddingId}`, { credentials: "include" });
         if (res.status === 200) {
           const data = await res.json();
-          setState({ kind: "ready", timeline: data.timeline, wedding: data.wedding });
+          if (data.status === "ready") {
+            setState({ kind: "ready", timeline: data.timeline, wedding: data.wedding });
+          } else if (data.status === "failed") {
+            setState({ kind: "failed", weddingId, canRetry: data.canRetry, retriesLeft: data.retriesLeft });
+          }
         }
       } catch { /* keep polling */ }
     };
@@ -391,6 +452,17 @@ export function Dashboard() {
           {state.kind === "generating" && (
             <motion.div key="generating" exit={{ opacity: 0 }}>
               <GeneratingState />
+            </motion.div>
+          )}
+
+          {state.kind === "failed" && (
+            <motion.div key="failed" exit={{ opacity: 0 }}>
+              <FailedState
+                weddingId={state.weddingId}
+                canRetry={state.canRetry}
+                retriesLeft={state.retriesLeft}
+                onRetry={() => setState({ kind: "generating", weddingId: state.weddingId })}
+              />
             </motion.div>
           )}
 

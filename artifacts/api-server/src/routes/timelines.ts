@@ -7,6 +7,7 @@ import { requireAuth } from "../middlewares/requireAuth";
 import { z } from "zod";
 
 const router: IRouter = Router();
+const MAX_RETRIES = 3;
 
 // ── Validation ────────────────────────────────────────────────────────────────
 
@@ -47,18 +48,26 @@ async function generateAndStore(weddingId: number, weddingDate: string, city: st
     });
 
     const usage = completion.usage;
-    console.log(`[timelines] tokens used — prompt: ${usage?.prompt_tokens}, completion: ${usage?.completion_tokens}, total: ${usage?.total_tokens}`);
+    console.log(`[timelines] tokens — prompt: ${usage?.prompt_tokens}, completion: ${usage?.completion_tokens}, total: ${usage?.total_tokens}`);
 
     const raw = completion.choices[0]?.message?.content ?? "{}";
     const parsed = JSON.parse(raw) as { weeks?: TimelineWeek[] };
     const weeks: TimelineWeek[] = parsed.weeks ?? [];
 
-    await db.insert(timelinesTable).values({
-      weddingId,
-      tasks: weeks,
-    });
+    // Delete any existing timeline row (retry path), then insert fresh
+    await db.delete(timelinesTable).where(eq(timelinesTable.weddingId, weddingId));
+    await db.insert(timelinesTable).values({ weddingId, tasks: weeks });
+
+    await db
+      .update(weddingsTable)
+      .set({ generationStatus: "ready" })
+      .where(eq(weddingsTable.id, weddingId));
   } catch (err) {
     console.error("[timelines] generation failed for wedding", weddingId, err);
+    await db
+      .update(weddingsTable)
+      .set({ generationStatus: "failed" })
+      .where(eq(weddingsTable.id, weddingId));
   }
 }
 
@@ -82,24 +91,20 @@ router.post("/generate", requireAuth, async (req, res) => {
   }
   const userId = users[0].id;
 
-  // Rate limit: one timeline per user — check for existing wedding + timeline
+  // One wedding per user — check for existing
   const existingWeddings = await db.select().from(weddingsTable).where(eq(weddingsTable.userId, userId)).limit(1);
   if (existingWeddings.length > 0) {
-    const existingWedding = existingWeddings[0];
-    const existingTimelines = await db
-      .select()
-      .from(timelinesTable)
-      .where(eq(timelinesTable.weddingId, existingWedding.id))
-      .limit(1);
+    const existing = existingWeddings[0];
+    const status = existing.generationStatus;
 
-    if (existingTimelines.length > 0) {
-      // Already generated — return cached data
-      res.status(200).json({ weddingId: existingWedding.id, status: "ready", timeline: existingTimelines[0] });
+    if (status === "ready") {
+      const timelines = await db.select().from(timelinesTable).where(eq(timelinesTable.weddingId, existing.id)).limit(1);
+      res.status(200).json({ weddingId: existing.id, status: "ready", timeline: timelines[0] });
       return;
     }
 
-    // Wedding exists but timeline still generating
-    res.status(202).json({ weddingId: existingWedding.id, status: "generating" });
+    // Still generating or failed — return current status
+    res.status(202).json({ weddingId: existing.id, status });
     return;
   }
 
@@ -115,6 +120,51 @@ router.post("/generate", requireAuth, async (req, res) => {
   res.status(202).json({ weddingId: wedding.id, status: "generating" });
 });
 
+// ── POST /api/timelines/:weddingId/retry ──────────────────────────────────────
+
+router.post("/:weddingId/retry", requireAuth, async (req, res) => {
+  const clerkUserId = (req as any).clerkUserId as string;
+  const weddingId = parseInt(req.params["weddingId"] as string, 10);
+
+  if (isNaN(weddingId)) {
+    res.status(400).json({ error: "Invalid weddingId" });
+    return;
+  }
+
+  const users = await db.select().from(usersTable).where(eq(usersTable.clerkId, clerkUserId)).limit(1);
+  if (users.length === 0) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+
+  const weddings = await db.select().from(weddingsTable).where(eq(weddingsTable.id, weddingId)).limit(1);
+  if (weddings.length === 0 || weddings[0].userId !== users[0].id) {
+    res.status(404).json({ error: "Wedding not found" });
+    return;
+  }
+
+  const wedding = weddings[0];
+  if (wedding.generationStatus !== "failed") {
+    res.status(409).json({ error: "Timeline is not in a failed state" });
+    return;
+  }
+  if (wedding.retryCount >= MAX_RETRIES) {
+    res.status(429).json({ error: "Maximum retries reached. Please contact support." });
+    return;
+  }
+
+  // Reset status and increment retry count
+  await db
+    .update(weddingsTable)
+    .set({ generationStatus: "generating", retryCount: wedding.retryCount + 1 })
+    .where(eq(weddingsTable.id, weddingId));
+
+  // Fire-and-forget retry
+  generateAndStore(weddingId, wedding.weddingDate, wedding.city, wedding.guestCount, wedding.style);
+
+  res.status(202).json({ weddingId, status: "generating" });
+});
+
 // ── GET /api/timelines/:weddingId ─────────────────────────────────────────────
 
 router.get("/:weddingId", requireAuth, async (req, res) => {
@@ -126,36 +176,38 @@ router.get("/:weddingId", requireAuth, async (req, res) => {
     return;
   }
 
-  // Verify ownership
   const users = await db.select().from(usersTable).where(eq(usersTable.clerkId, clerkUserId)).limit(1);
   if (users.length === 0) {
     res.status(404).json({ error: "User not found" });
     return;
   }
 
-  const weddings = await db
-    .select()
-    .from(weddingsTable)
-    .where(eq(weddingsTable.id, weddingId))
-    .limit(1);
-
+  const weddings = await db.select().from(weddingsTable).where(eq(weddingsTable.id, weddingId)).limit(1);
   if (weddings.length === 0 || weddings[0].userId !== users[0].id) {
     res.status(404).json({ error: "Wedding not found" });
     return;
   }
 
-  const timelines = await db
-    .select()
-    .from(timelinesTable)
-    .where(eq(timelinesTable.weddingId, weddingId))
-    .limit(1);
+  const wedding = weddings[0];
+  const status = wedding.generationStatus;
 
-  if (timelines.length === 0) {
+  if (status === "generating") {
     res.status(202).json({ status: "generating" });
     return;
   }
 
-  res.json({ status: "ready", timeline: timelines[0], wedding: weddings[0] });
+  if (status === "failed") {
+    res.status(200).json({
+      status: "failed",
+      canRetry: wedding.retryCount < MAX_RETRIES,
+      retriesLeft: MAX_RETRIES - wedding.retryCount,
+    });
+    return;
+  }
+
+  // Ready — return timeline
+  const timelines = await db.select().from(timelinesTable).where(eq(timelinesTable.weddingId, weddingId)).limit(1);
+  res.json({ status: "ready", timeline: timelines[0], wedding });
 });
 
 export default router;
