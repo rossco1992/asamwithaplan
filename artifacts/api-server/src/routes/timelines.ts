@@ -78,13 +78,22 @@ async function generateAndStore(weddingId: number, weddingDate: string, city: st
 
     await db
       .update(weddingsTable)
-      .set({ generationStatus: "ready" })
+      .set({ generationStatus: "ready", generationError: null })
       .where(eq(weddingsTable.id, weddingId));
   } catch (err) {
-    console.error("[timelines] generation failed for wedding", weddingId, err);
+    const message = err instanceof Error ? err.message : String(err);
+    // OpenAI SDK errors carry extra context (status, code, type) worth logging.
+    const status = (err as any)?.status;
+    const code = (err as any)?.code;
+    console.error(
+      `[timelines] generation failed for wedding ${weddingId}`,
+      { message, status, code },
+      err,
+    );
+    const detail = [status && `HTTP ${status}`, code, message].filter(Boolean).join(" · ");
     await db
       .update(weddingsTable)
-      .set({ generationStatus: "failed" })
+      .set({ generationStatus: "failed", generationError: detail })
       .where(eq(weddingsTable.id, weddingId))
       .catch((dbErr) => console.error("[timelines] failed to write failed status", weddingId, dbErr));
   }
@@ -173,10 +182,10 @@ router.post("/:weddingId/retry", requireAuth, async (req, res) => {
     return;
   }
 
-  // Reset status and increment retry count
+  // Reset status, clear the previous error, and increment retry count
   await db
     .update(weddingsTable)
-    .set({ generationStatus: "generating", retryCount: wedding.retryCount + 1 })
+    .set({ generationStatus: "generating", retryCount: wedding.retryCount + 1, generationError: null })
     .where(eq(weddingsTable.id, weddingId));
 
   // Fire-and-forget retry
@@ -248,6 +257,7 @@ router.get("/:weddingId", requireAuth, async (req, res) => {
       status: "failed",
       retriesRemaining: MAX_RETRIES - wedding.retryCount,
       retriesUsed: wedding.retryCount,
+      error: wedding.generationError ?? null,
     });
     return;
   }

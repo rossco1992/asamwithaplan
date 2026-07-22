@@ -20,7 +20,7 @@ interface WeddingData { id: number; weddingDate: string; city: string; guestCoun
 type DashboardState =
   | { kind: "form" }
   | { kind: "generating"; weddingId: number }
-  | { kind: "failed"; weddingId: number; retriesRemaining: number }
+  | { kind: "failed"; weddingId: number; retriesRemaining: number; detail?: string | null }
   | { kind: "ready"; timeline: TimelineData; wedding: WeddingData };
 
 type DashboardTab = "timeline" | "quotes";
@@ -289,7 +289,7 @@ function GeneratingState() {
 
 // ── Failed state ──────────────────────────────────────────────────────────────
 
-function FailedState({ weddingId, retriesRemaining, onRetry, onStartOver }: { weddingId: number; retriesRemaining: number; onRetry: () => void; onStartOver: () => void }) {
+function FailedState({ weddingId, retriesRemaining, detail, onRetry, onStartOver }: { weddingId: number; retriesRemaining: number; detail?: string | null; onRetry: () => void; onStartOver: () => void }) {
   const [retrying, setRetrying] = useState(false);
   const [startingOver, setStartingOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -352,6 +352,17 @@ function FailedState({ weddingId, retriesRemaining, onRetry, onStartOver }: { we
       <p className="text-muted-foreground leading-relaxed mb-8">
         The plan couldn't be generated this time. This is usually a temporary issue — give it another try.
       </p>
+
+      {detail && (
+        <div className="mb-6">
+          <p className="text-xs font-semibold tracking-wider uppercase text-muted-foreground mb-1.5">
+            Technical detail
+          </p>
+          <pre className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-3 whitespace-pre-wrap break-words font-mono">
+            {detail}
+          </pre>
+        </div>
+      )}
 
       {error && (
         <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-3 mb-4">
@@ -421,7 +432,7 @@ export function Dashboard() {
         if (data.status === "ready") {
           setState({ kind: "ready", timeline: data.timeline, wedding: data.wedding });
         } else if (data.status === "failed") {
-          setState({ kind: "failed", weddingId, retriesRemaining: data.retriesRemaining ?? 3 });
+          setState({ kind: "failed", weddingId, retriesRemaining: data.retriesRemaining ?? 3, detail: data.error ?? null });
         } else if (data.status === "generating") {
           setState({ kind: "generating", weddingId });
         }
@@ -444,7 +455,7 @@ export function Dashboard() {
         if (data.status === "ready") {
           setState({ kind: "ready", timeline: data.timeline, wedding: data.wedding });
         } else if (data.status === "failed") {
-          setState({ kind: "failed", weddingId, retriesRemaining: data.retriesRemaining ?? 3 });
+          setState({ kind: "failed", weddingId, retriesRemaining: data.retriesRemaining ?? 3, detail: data.error ?? null });
         }
         // "generating" — keep polling
       } catch { /* keep polling */ }
@@ -514,6 +525,7 @@ export function Dashboard() {
               <FailedState
                 weddingId={state.weddingId}
                 retriesRemaining={state.retriesRemaining}
+                detail={state.detail}
                 onRetry={() => handleRetrySuccess(state.weddingId)}
                 onStartOver={handleStartOver}
               />
