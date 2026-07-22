@@ -3,12 +3,10 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig, loadEnv } from 'vite';
 
-import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
-
-export default defineConfig(async ({ mode }) => {
-  // Merge .env files (for local dev) with real process.env (Replit sets these
-  // directly). Prefix '' loads every key, not just VITE_-prefixed ones, so
-  // PORT / BASE_PATH resolve from a local .env without needing shell exports.
+export default defineConfig(({ mode }) => {
+  // Merge .env files with real process.env. Prefix '' loads every key, not just
+  // VITE_-prefixed ones, so PORT / BASE_PATH resolve from a local .env or from
+  // the environment without needing shell exports.
   const env = loadEnv(mode, import.meta.dirname, '');
 
   const rawPort = env.PORT;
@@ -33,9 +31,9 @@ export default defineConfig(async ({ mode }) => {
     );
   }
 
-  // Where to forward /api requests during local dev. In production the Replit
-  // router serves the API on the same host, so this proxy is only exercised
-  // when running `vite dev` against a separately-running api-server.
+  // Where to forward /api requests during local dev. In production the API
+  // server serves this frontend on the same host, so this proxy is only
+  // exercised when running `vite dev` against a separately-running api-server.
   const apiTarget = env.API_PROXY_TARGET || 'http://localhost:3001';
 
   return {
@@ -43,20 +41,6 @@ export default defineConfig(async ({ mode }) => {
     plugins: [
       react(),
       tailwindcss({ optimize: false }),
-      runtimeErrorOverlay(),
-      ...(process.env.NODE_ENV !== 'production' &&
-      process.env.REPL_ID !== undefined
-        ? [
-            await import('@replit/vite-plugin-cartographer').then((m) =>
-              m.cartographer({
-                root: path.resolve(import.meta.dirname, '..'),
-              }),
-            ),
-            await import('@replit/vite-plugin-dev-banner').then((m) =>
-              m.devBanner(),
-            ),
-          ]
-        : []),
     ],
     resolve: {
       alias: {
