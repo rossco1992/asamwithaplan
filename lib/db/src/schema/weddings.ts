@@ -22,6 +22,7 @@ export const weddingsTable = pgTable("weddings", {
     .default("generating")
     .notNull(),
   retryCount: integer("retry_count").default(0).notNull(),
+  generationError: text("generation_error"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -30,6 +31,7 @@ export const insertWeddingSchema = createInsertSchema(weddingsTable).omit({
   createdAt: true,
   generationStatus: true,
   retryCount: true,
+  generationError: true,
 });
 export type InsertWedding = z.infer<typeof insertWeddingSchema>;
 export type Wedding = typeof weddingsTable.$inferSelect;

@@ -20,7 +20,7 @@ interface WeddingData { id: number; weddingDate: string; city: string; guestCoun
 type DashboardState =
   | { kind: "form" }
   | { kind: "generating"; weddingId: number }
-  | { kind: "failed"; weddingId: number; retriesRemaining: number }
+  | { kind: "failed"; weddingId: number; retriesRemaining: number; detail?: string | null }
   | { kind: "ready"; timeline: TimelineData; wedding: WeddingData };
 
 type DashboardTab = "timeline" | "quotes";
@@ -289,8 +289,9 @@ function GeneratingState() {
 
 // ── Failed state ──────────────────────────────────────────────────────────────
 
-function FailedState({ weddingId, retriesRemaining, onRetry }: { weddingId: number; retriesRemaining: number; onRetry: () => void }) {
+function FailedState({ weddingId, retriesRemaining, detail, onRetry, onStartOver }: { weddingId: number; retriesRemaining: number; detail?: string | null; onRetry: () => void; onStartOver: () => void }) {
   const [retrying, setRetrying] = useState(false);
+  const [startingOver, setStartingOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleRetry = async () => {
@@ -314,6 +315,27 @@ function FailedState({ weddingId, retriesRemaining, onRetry }: { weddingId: numb
     }
   };
 
+  const handleStartOver = async () => {
+    setError(null);
+    setStartingOver(true);
+    try {
+      const res = await fetch(`${apiBase}/timelines/${weddingId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? "Couldn't start over. Please try again.");
+        return;
+      }
+      onStartOver();
+    } catch {
+      setError("Network error. Please check your connection.");
+    } finally {
+      setStartingOver(false);
+    }
+  };
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 16 }}
@@ -331,24 +353,46 @@ function FailedState({ weddingId, retriesRemaining, onRetry }: { weddingId: numb
         The plan couldn't be generated this time. This is usually a temporary issue — give it another try.
       </p>
 
+      {detail && (
+        <div className="mb-6">
+          <p className="text-xs font-semibold tracking-wider uppercase text-muted-foreground mb-1.5">
+            Technical detail
+          </p>
+          <pre className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-3 whitespace-pre-wrap break-words font-mono">
+            {detail}
+          </pre>
+        </div>
+      )}
+
+      {error && (
+        <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-3 mb-4">
+          {error}
+        </p>
+      )}
+
       {retriesRemaining > 0 ? (
         <>
-          {error && (
-            <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-3 mb-4">
-              {error}
-            </p>
-          )}
-          <Button onClick={handleRetry} disabled={retrying} className="h-12 px-8 text-base">
-            {retrying ? "Trying again…" : "Try again →"}
-          </Button>
+          <div className="flex items-center gap-3">
+            <Button onClick={handleRetry} disabled={retrying || startingOver} className="h-12 px-8 text-base">
+              {retrying ? "Trying again…" : "Try again →"}
+            </Button>
+            <Button variant="ghost" onClick={handleStartOver} disabled={retrying || startingOver} className="h-12 px-6 text-base">
+              {startingOver ? "Starting over…" : "Start over"}
+            </Button>
+          </div>
           <p className="text-xs text-muted-foreground mt-3">
             {retriesRemaining} attempt{retriesRemaining !== 1 ? "s" : ""} remaining
           </p>
         </>
       ) : (
-        <p className="text-sm text-muted-foreground bg-secondary rounded-lg px-4 py-3 border border-border">
-          No retries remaining. Please contact support if this keeps happening.
-        </p>
+        <>
+          <p className="text-sm text-muted-foreground bg-secondary rounded-lg px-4 py-3 border border-border mb-4">
+            No retries remaining. Start over with fresh details, or contact support if this keeps happening.
+          </p>
+          <Button onClick={handleStartOver} disabled={startingOver} className="h-12 px-8 text-base">
+            {startingOver ? "Starting over…" : "Start over →"}
+          </Button>
+        </>
       )}
     </motion.div>
   );
@@ -388,7 +432,7 @@ export function Dashboard() {
         if (data.status === "ready") {
           setState({ kind: "ready", timeline: data.timeline, wedding: data.wedding });
         } else if (data.status === "failed") {
-          setState({ kind: "failed", weddingId, retriesRemaining: data.retriesRemaining ?? 3 });
+          setState({ kind: "failed", weddingId, retriesRemaining: data.retriesRemaining ?? 3, detail: data.error ?? null });
         } else if (data.status === "generating") {
           setState({ kind: "generating", weddingId });
         }
@@ -411,7 +455,7 @@ export function Dashboard() {
         if (data.status === "ready") {
           setState({ kind: "ready", timeline: data.timeline, wedding: data.wedding });
         } else if (data.status === "failed") {
-          setState({ kind: "failed", weddingId, retriesRemaining: data.retriesRemaining ?? 3 });
+          setState({ kind: "failed", weddingId, retriesRemaining: data.retriesRemaining ?? 3, detail: data.error ?? null });
         }
         // "generating" — keep polling
       } catch { /* keep polling */ }
@@ -428,6 +472,11 @@ export function Dashboard() {
 
   const handleRetrySuccess = useCallback((weddingId: number) => {
     setState({ kind: "generating", weddingId });
+  }, []);
+
+  const handleStartOver = useCallback(() => {
+    localStorage.removeItem("sam_wedding_id");
+    setState({ kind: "form" });
   }, []);
 
   const handleSignOut = () => {
@@ -476,7 +525,9 @@ export function Dashboard() {
               <FailedState
                 weddingId={state.weddingId}
                 retriesRemaining={state.retriesRemaining}
+                detail={state.detail}
                 onRetry={() => handleRetrySuccess(state.weddingId)}
+                onStartOver={handleStartOver}
               />
             </motion.div>
           )}
