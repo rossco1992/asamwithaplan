@@ -48,7 +48,12 @@ async function generateAndStore(weddingId: number, weddingDate: string, city: st
     const completion = await openai.chat.completions.create({
       model: "gpt-5-nano",
       response_format: { type: "json_object" },
-      max_completion_tokens: 2500,
+      // gpt-5-nano is a reasoning model: max_completion_tokens must cover the
+      // hidden reasoning tokens AND the visible JSON. Keeping reasoning minimal
+      // (this is a deterministic formatting task) plus a generous ceiling leaves
+      // plenty of room for the full timeline, avoiding finish_reason=length.
+      reasoning_effort: "minimal",
+      max_completion_tokens: 8000,
       messages: [
         { role: "system", content: buildSystemPrompt() },
         { role: "user", content: buildUserPrompt(weddingDate, city, guestCount, style) },
@@ -178,6 +183,38 @@ router.post("/:weddingId/retry", requireAuth, async (req, res) => {
   generateAndStore(weddingId, wedding.weddingDate, wedding.city, wedding.guestCount, wedding.style);
 
   res.status(202).json({ weddingId, status: "generating" });
+});
+
+// ── DELETE /api/timelines/:weddingId ──────────────────────────────────────────
+// Start over: removes the wedding + its timeline so the user can re-onboard.
+// This is the escape hatch when retries are exhausted (retryCount >= MAX_RETRIES).
+
+router.delete("/:weddingId", requireAuth, async (req, res) => {
+  const clerkUserId = (req as any).clerkUserId as string;
+  const weddingId = parseInt(req.params["weddingId"] as string, 10);
+
+  if (isNaN(weddingId)) {
+    res.status(400).json({ error: "Invalid weddingId" });
+    return;
+  }
+
+  const users = await db.select().from(usersTable).where(eq(usersTable.clerkId, clerkUserId)).limit(1);
+  if (users.length === 0) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+
+  const weddings = await db.select().from(weddingsTable).where(eq(weddingsTable.id, weddingId)).limit(1);
+  if (weddings.length === 0 || weddings[0].userId !== users[0].id) {
+    res.status(404).json({ error: "Wedding not found" });
+    return;
+  }
+
+  // Remove the timeline first (FK), then the wedding.
+  await db.delete(timelinesTable).where(eq(timelinesTable.weddingId, weddingId));
+  await db.delete(weddingsTable).where(eq(weddingsTable.id, weddingId));
+
+  res.status(200).json({ ok: true });
 });
 
 // ── GET /api/timelines/:weddingId ─────────────────────────────────────────────
