@@ -1,8 +1,9 @@
 import { Router, type IRouter } from "express";
-import { db, usersTable, weddingsTable, timelinesTable } from "@workspace/db";
+import { randomUUID } from "node:crypto";
+import { db, usersTable, weddingsTable, timelinesTable, timelineTaskCompletionsTable, timelineTaskId } from "@workspace/db";
 import type { TimelineWeek } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { requireAuth } from "../middlewares/requireAuth";
 import { z } from "zod";
 
@@ -41,6 +42,30 @@ function buildUserPrompt(weddingDate: string, city: string, guestCount: number, 
   return `Wedding: ${weddingDate} in ${city}. Guests: ${guestCount}. Style: ${style}. Today: ${today}. Generate a concise timeline — max 24 entries, 2–3 tasks each. Keep it short enough that the full JSON fits in your response.`;
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Removes a wedding's timeline along with any completion rows pointing at it.
+ * Completions carry an FK to the timeline, so they must go first.
+ */
+async function deleteTimelineForWedding(weddingId: number) {
+  const existing = await db
+    .select({ id: timelinesTable.id })
+    .from(timelinesTable)
+    .where(eq(timelinesTable.weddingId, weddingId));
+
+  if (existing.length > 0) {
+    await db.delete(timelineTaskCompletionsTable).where(
+      inArray(
+        timelineTaskCompletionsTable.timelineId,
+        existing.map((t) => t.id),
+      ),
+    );
+  }
+
+  await db.delete(timelinesTable).where(eq(timelinesTable.weddingId, weddingId));
+}
+
 // ── Background LLM generation ─────────────────────────────────────────────────
 
 async function generateAndStore(weddingId: number, weddingDate: string, city: string, guestCount: number, style: string) {
@@ -70,10 +95,17 @@ async function generateAndStore(weddingId: number, weddingDate: string, city: st
       throw new Error("Model output was truncated — reduce max_completion_tokens or prompt size");
     }
     const parsed = JSON.parse(raw) as { weeks?: TimelineWeek[] };
-    const weeks: TimelineWeek[] = parsed.weeks ?? [];
+    // Stamp every task with a stable id so completions survive re-reads of the
+    // jsonb. The model never sees these — they're ours.
+    const weeks: TimelineWeek[] = (parsed.weeks ?? []).map((week) => ({
+      ...week,
+      tasks: (week.tasks ?? []).map((task) => ({ ...task, id: randomUUID() })),
+    }));
 
-    // Delete any existing timeline row (retry path), then insert fresh
-    await db.delete(timelinesTable).where(eq(timelinesTable.weddingId, weddingId));
+    // Delete any existing timeline row (retry path), then insert fresh. The old
+    // timeline's completions go with it — the new tasks have new ids, so a
+    // regenerated plan starts unticked rather than inheriting stale ticks.
+    await deleteTimelineForWedding(weddingId);
     await db.insert(timelinesTable).values({ weddingId, tasks: weeks });
 
     await db
@@ -219,8 +251,8 @@ router.delete("/:weddingId", requireAuth, async (req, res) => {
     return;
   }
 
-  // Remove the timeline first (FK), then the wedding.
-  await db.delete(timelinesTable).where(eq(timelinesTable.weddingId, weddingId));
+  // Remove the timeline and its completions first (FK), then the wedding.
+  await deleteTimelineForWedding(weddingId);
   await db.delete(weddingsTable).where(eq(weddingsTable.id, weddingId));
 
   res.status(200).json({ ok: true });
@@ -275,7 +307,89 @@ router.get("/:weddingId", requireAuth, async (req, res) => {
     return;
   }
 
-  res.json({ status: "ready", timeline: timelines[0], wedding });
+  const completions = await db
+    .select({ taskId: timelineTaskCompletionsTable.taskId })
+    .from(timelineTaskCompletionsTable)
+    .where(eq(timelineTaskCompletionsTable.timelineId, timelines[0].id));
+
+  res.json({
+    status: "ready",
+    timeline: timelines[0],
+    wedding,
+    completedTaskIds: completions.map((c) => c.taskId),
+  });
+});
+
+// ── PUT /api/timelines/:weddingId/tasks/:taskId ───────────────────────────────
+// Tick a task off (or un-tick it). Idempotent in both directions.
+
+const ToggleTaskBody = z.object({ completed: z.boolean() });
+
+router.put("/:weddingId/tasks/:taskId", requireAuth, async (req, res) => {
+  const clerkUserId = (req as any).clerkUserId as string;
+  const weddingId = parseInt(req.params["weddingId"] as string, 10);
+  const taskId = req.params["taskId"] as string;
+
+  if (isNaN(weddingId)) {
+    res.status(400).json({ error: "Invalid weddingId" });
+    return;
+  }
+
+  const bodyResult = ToggleTaskBody.safeParse(req.body);
+  if (!bodyResult.success) {
+    res.status(400).json({ error: "Invalid input", details: bodyResult.error.flatten() });
+    return;
+  }
+  const { completed } = bodyResult.data;
+
+  const users = await db.select().from(usersTable).where(eq(usersTable.clerkId, clerkUserId)).limit(1);
+  if (users.length === 0) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+
+  const weddings = await db.select().from(weddingsTable).where(eq(weddingsTable.id, weddingId)).limit(1);
+  if (weddings.length === 0 || weddings[0].userId !== users[0].id) {
+    res.status(404).json({ error: "Wedding not found" });
+    return;
+  }
+
+  const timelines = await db.select().from(timelinesTable).where(eq(timelinesTable.weddingId, weddingId)).limit(1);
+  if (timelines.length === 0) {
+    res.status(404).json({ error: "Timeline not found" });
+    return;
+  }
+  const timeline = timelines[0];
+
+  // Only accept ids that actually exist in this timeline, so a stale client
+  // can't accumulate orphan completion rows after a regeneration.
+  const knownTaskIds = new Set(
+    timeline.tasks.flatMap((week, weekIndex) =>
+      week.tasks.map((task, taskIndex) => timelineTaskId(task, weekIndex, taskIndex)),
+    ),
+  );
+  if (!knownTaskIds.has(taskId)) {
+    res.status(404).json({ error: "Task not found in this timeline" });
+    return;
+  }
+
+  if (completed) {
+    await db
+      .insert(timelineTaskCompletionsTable)
+      .values({ timelineId: timeline.id, taskId })
+      .onConflictDoNothing();
+  } else {
+    await db
+      .delete(timelineTaskCompletionsTable)
+      .where(
+        and(
+          eq(timelineTaskCompletionsTable.timelineId, timeline.id),
+          eq(timelineTaskCompletionsTable.taskId, taskId),
+        ),
+      );
+  }
+
+  res.status(200).json({ taskId, completed });
 });
 
 export default router;

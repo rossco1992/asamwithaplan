@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useUser, useClerk } from "@clerk/react";
 import { Button } from "@/components/ui/button";
 import { motion, AnimatePresence } from "framer-motion";
+import { Roadmap } from "@/components/Roadmap";
 import { QuotesPage } from "./QuotesPage";
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -12,7 +13,7 @@ const apiBase = basePath ? `${basePath}/api` : "/api";
 type WeddingStyle = "intimate" | "standard" | "large";
 type Priority = "urgent" | "this-week" | "upcoming";
 
-interface TimelineTask { title: string; priority: Priority; }
+interface TimelineTask { id?: string; title: string; priority: Priority; }
 interface TimelineWeek { weekLabel: string; phase: string; tasks: TimelineTask[]; }
 interface TimelineData { id: number; weddingId: number; generatedAt: string; tasks: TimelineWeek[]; }
 interface WeddingData { id: number; weddingDate: string; city: string; guestCount: number; style: string; }
@@ -21,97 +22,125 @@ type DashboardState =
   | { kind: "form" }
   | { kind: "generating"; weddingId: number }
   | { kind: "failed"; weddingId: number; retriesRemaining: number; detail?: string | null }
-  | { kind: "ready"; timeline: TimelineData; wedding: WeddingData };
+  | { kind: "ready"; timeline: TimelineData; wedding: WeddingData; completedTaskIds: string[] };
 
 type DashboardTab = "timeline" | "quotes";
 
-// ── Priority badge ────────────────────────────────────────────────────────────
-
-const priorityConfig: Record<Priority, { label: string; classes: string }> = {
-  urgent:      { label: "Urgent",     classes: "bg-red-50 text-red-700 border-red-200" },
-  "this-week": { label: "This week",  classes: "bg-accent/10 text-accent border-accent/20" },
-  upcoming:    { label: "Upcoming",   classes: "bg-secondary text-muted-foreground border-border" },
-};
-
-function PriorityBadge({ priority }: { priority: Priority }) {
-  const { label, classes } = priorityConfig[priority] ?? priorityConfig["upcoming"];
-  return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-sm text-[10px] font-semibold tracking-wider uppercase border ${classes}`}>
-      {label}
-    </span>
-  );
-}
-
 // ── Timeline view ─────────────────────────────────────────────────────────────
 
-function TimelineView({ timeline, wedding }: { timeline: TimelineData; wedding: WeddingData }) {
-  const phases = Array.from(new Set(timeline.tasks.map((w) => w.phase)));
-  const byPhase = Object.fromEntries(
-    phases.map((p) => [p, timeline.tasks.filter((w) => w.phase === p)])
+function TimelineView({
+  timeline,
+  wedding,
+  initialCompletedTaskIds,
+}: {
+  timeline: TimelineData;
+  wedding: WeddingData;
+  initialCompletedTaskIds: string[];
+}) {
+  const [completedTaskIds, setCompletedTaskIds] = useState<Set<string>>(
+    () => new Set(initialCompletedTaskIds),
+  );
+
+  // Re-sync if the timeline itself changes underneath us (retry, start over).
+  useEffect(() => {
+    setCompletedTaskIds(new Set(initialCompletedTaskIds));
+  }, [timeline.id, initialCompletedTaskIds]);
+
+  const handleToggleTask = useCallback(
+    async (taskId: string, completed: boolean) => {
+      // Optimistic — ticking a box should feel instant.
+      setCompletedTaskIds((prev) => {
+        const next = new Set(prev);
+        if (completed) next.add(taskId);
+        else next.delete(taskId);
+        return next;
+      });
+
+      try {
+        const res = await fetch(`${apiBase}/timelines/${wedding.id}/tasks/${encodeURIComponent(taskId)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ completed }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      } catch {
+        // Roll back so the UI never claims progress the server didn't record.
+        setCompletedTaskIds((prev) => {
+          const next = new Set(prev);
+          if (completed) next.delete(taskId);
+          else next.add(taskId);
+          return next;
+        });
+      }
+    },
+    [wedding.id],
   );
 
   return (
-    <div className="space-y-12">
-      {phases.map((phase) => (
-        <div key={phase}>
-          <h2 className="text-xs font-semibold tracking-widest uppercase text-muted-foreground mb-6 pb-2 border-b border-border">
-            {phase}
-          </h2>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {byPhase[phase].map((week, i) => (
-              <motion.div
-                key={`${phase}-${i}`}
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.04, duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-                className="bg-card rounded-xl border border-border p-5 flex flex-col gap-3"
-              >
-                <p className="text-xs font-medium text-muted-foreground">{week.weekLabel}</p>
-                <ul className="space-y-2.5">
-                  {week.tasks.map((task, j) => (
-                    <li key={j} className="flex items-start gap-2.5">
-                      <div className="w-1.5 h-1.5 rounded-full bg-accent mt-1.5 shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-primary leading-snug">{task.title}</p>
-                        <div className="mt-1">
-                          <PriorityBadge priority={task.priority} />
-                        </div>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </motion.div>
-            ))}
-          </div>
-        </div>
-      ))}
-    </div>
+    <Roadmap
+      weeks={timeline.tasks}
+      startedAt={timeline.generatedAt}
+      weddingDate={wedding.weddingDate}
+      completedTaskIds={completedTaskIds}
+      onToggleTask={handleToggleTask}
+    />
   );
 }
 
 // ── Skeleton loader ───────────────────────────────────────────────────────────
 
+// Mirrors the roadmap's shape — a winding road with milestones alternating
+// above and below it — so the wait previews what's coming.
 function TimelineSkeleton() {
+  const milestones = [0, 1, 2, 3];
+
   return (
-    <div className="space-y-10 animate-pulse">
-      {[3, 4, 3].map((cols, pi) => (
-        <div key={pi}>
-          <div className="h-3 w-32 bg-secondary rounded mb-6" />
-          <div className={`grid gap-4 sm:grid-cols-2 lg:grid-cols-3`}>
-            {Array.from({ length: cols }).map((_, i) => (
-              <div key={i} className="bg-card rounded-xl border border-border p-5 space-y-3">
-                <div className="h-2.5 w-24 bg-secondary rounded" />
-                {Array.from({ length: 3 }).map((_, j) => (
-                  <div key={j} className="space-y-1.5">
-                    <div className="h-3 w-full bg-secondary rounded" />
-                    <div className="h-4 w-16 bg-secondary/60 rounded" />
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
-        </div>
-      ))}
+    <div className="animate-pulse">
+      <div className="flex items-center gap-6 mb-6">
+        <div className="h-8 w-16 bg-secondary rounded" />
+        <div className="h-1.5 flex-1 max-w-xs bg-secondary rounded-full" />
+      </div>
+
+      <div className="relative rounded-2xl border border-border bg-secondary/30 h-[760px] overflow-hidden">
+        <svg
+          className="absolute inset-0 w-full h-full"
+          viewBox="0 0 1200 760"
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          <path
+            d="M 40,380 C 190,220 310,220 460,380 C 610,540 730,540 880,380 C 1030,220 1120,240 1200,300"
+            fill="none"
+            stroke="hsl(var(--border))"
+            strokeWidth={16}
+            strokeLinecap="round"
+          />
+        </svg>
+
+        {milestones.map((i) => {
+          const above = i % 2 === 0;
+          return (
+            <div
+              key={i}
+              className="absolute w-[248px] bg-card rounded-xl border border-border p-4 space-y-3"
+              style={{
+                left: `${8 + i * 24}%`,
+                [above ? "bottom" : "top"]: "56%",
+              }}
+            >
+              <div className="h-2.5 w-24 bg-secondary rounded" />
+              <div className="h-2 w-16 bg-secondary/60 rounded" />
+              {[0, 1].map((j) => (
+                <div key={j} className="space-y-1.5">
+                  <div className="h-3 w-full bg-secondary rounded" />
+                  <div className="h-4 w-16 bg-secondary/60 rounded" />
+                </div>
+              ))}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -430,7 +459,7 @@ export function Dashboard() {
         const res = await fetch(`${apiBase}/timelines/${weddingId}`, { credentials: "include" });
         const data = await res.json();
         if (data.status === "ready") {
-          setState({ kind: "ready", timeline: data.timeline, wedding: data.wedding });
+          setState({ kind: "ready", timeline: data.timeline, wedding: data.wedding, completedTaskIds: data.completedTaskIds ?? [] });
         } else if (data.status === "failed") {
           setState({ kind: "failed", weddingId, retriesRemaining: data.retriesRemaining ?? 3, detail: data.error ?? null });
         } else if (data.status === "generating") {
@@ -453,7 +482,7 @@ export function Dashboard() {
         const res = await fetch(`${apiBase}/timelines/${weddingId}`, { credentials: "include" });
         const data = await res.json();
         if (data.status === "ready") {
-          setState({ kind: "ready", timeline: data.timeline, wedding: data.wedding });
+          setState({ kind: "ready", timeline: data.timeline, wedding: data.wedding, completedTaskIds: data.completedTaskIds ?? [] });
         } else if (data.status === "failed") {
           setState({ kind: "failed", weddingId, retriesRemaining: data.retriesRemaining ?? 3, detail: data.error ?? null });
         }
@@ -579,7 +608,11 @@ export function Dashboard() {
                     exit={{ opacity: 0 }}
                     transition={{ duration: 0.25 }}
                   >
-                    <TimelineView timeline={state.timeline} wedding={state.wedding} />
+                    <TimelineView
+                      timeline={state.timeline}
+                      wedding={state.wedding}
+                      initialCompletedTaskIds={state.completedTaskIds}
+                    />
                   </motion.div>
                 )}
                 {activeTab === "quotes" && (
