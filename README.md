@@ -122,6 +122,8 @@ This runs as-is on any Node host — a VPS, Docker, Render, Railway, Fly, etc.
 - `pnpm build:web` — build frontend + API for production
 - `pnpm start` — run the single production server
 - `pnpm db:push` — sync the Drizzle schema to `DATABASE_URL`
+- [`docs/authorization-audit.md`](docs/authorization-audit.md) — API ownership
+  boundaries and enforcement matrix
 
 ## Debugging timeline generation
 

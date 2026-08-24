@@ -8,7 +8,8 @@
     "dev:local": "export NODE_ENV=development && pnpm run build && node --enable-source-maps --env-file=.env ./dist/index.mjs",
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test src/lib/resourceAccess.test.mjs"
   },
   "dependencies": {
     "@clerk/express": "^2.1.43",

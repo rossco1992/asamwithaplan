@@ -1,9 +1,18 @@
 import { Router, type IRouter } from "express";
-import { db, usersTable, weddingsTable, quotesTable, vendorCategories } from "@workspace/db";
-import type { QuoteLineItem } from "@workspace/db";
+import { db, quotesTable, vendorCategories } from "@workspace/db";
+import type { QuoteLineItem, Wedding } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { eq, and } from "drizzle-orm";
 import { requireAuth } from "../middlewares/requireAuth";
+import {
+  getAuthorizedQuote,
+  getAuthorizedWedding,
+  type AuthorizedQuote,
+} from "../lib/authorization";
+import {
+  getAuthorizedResource,
+  requireResourceAccess,
+} from "../lib/resourceAccess";
 import { z } from "zod";
 import multer from "multer";
 // Import from the lib path to avoid pdf-parse's top-level test-mode side effect
@@ -34,6 +43,27 @@ const CreateQuoteBody = z.object({
   vendorName: z.string().min(1).max(200),
   category: z.enum(vendorCategories),
   rawText: z.string().min(10).max(20000).optional(),
+});
+
+const requireWeddingFromBody = requireResourceAccess<Wedding>({
+  resolveId: (req) => req.body?.weddingId,
+  lookup: getAuthorizedWedding,
+  invalidIdError: "Invalid weddingId",
+  notFoundError: "Wedding not found",
+});
+
+const requireWeddingFromQuery = requireResourceAccess<Wedding>({
+  resolveId: (req) => req.query["weddingId"],
+  lookup: getAuthorizedWedding,
+  invalidIdError: "weddingId query param required",
+  notFoundError: "Wedding not found",
+});
+
+const requireQuoteFromParams = requireResourceAccess<AuthorizedQuote>({
+  resolveId: (req) => req.params["id"],
+  lookup: getAuthorizedQuote,
+  invalidIdError: "Invalid quote id",
+  notFoundError: "Quote not found",
 });
 
 // ── AI parsing ────────────────────────────────────────────────────────────────
@@ -98,25 +128,6 @@ async function parseQuoteWithAI(rawText: string): Promise<{
   };
 }
 
-// ── Helper: verify wedding ownership ─────────────────────────────────────────
-
-async function getVerifiedWedding(clerkUserId: string, weddingId: number) {
-  const users = await db
-    .select()
-    .from(usersTable)
-    .where(eq(usersTable.clerkId, clerkUserId))
-    .limit(1);
-  if (users.length === 0) return null;
-
-  const weddings = await db
-    .select()
-    .from(weddingsTable)
-    .where(and(eq(weddingsTable.id, weddingId), eq(weddingsTable.userId, users[0].id)))
-    .limit(1);
-
-  return weddings.length > 0 ? weddings[0] : null;
-}
-
 // ── POST /api/quotes ──────────────────────────────────────────────────────────
 
 // Wrap multer so file-filter/size errors become consistent JSON 4xx responses
@@ -141,15 +152,16 @@ router.post(
   requireAuth,
   // Accept optional PDF upload; field name = "pdf"
   uploadSingle("pdf"),
+  requireWeddingFromBody,
   async (req, res) => {
-    const clerkUserId = (req as any).clerkUserId as string;
+    const wedding = getAuthorizedResource<Wedding>(req);
 
     const bodyResult = CreateQuoteBody.safeParse(req.body);
     if (!bodyResult.success) {
       res.status(400).json({ error: "Invalid input", details: bodyResult.error.flatten() });
       return;
     }
-    const { weddingId, vendorName, category, rawText: rawTextBody } = bodyResult.data;
+    const { vendorName, category, rawText: rawTextBody } = bodyResult.data;
 
     // Determine raw text: PDF upload takes priority over pasted text
     let rawText: string;
@@ -173,12 +185,6 @@ router.post(
       return;
     }
 
-    const wedding = await getVerifiedWedding(clerkUserId, weddingId);
-    if (!wedding) {
-      res.status(404).json({ error: "Wedding not found" });
-      return;
-    }
-
     let parsed: Awaited<ReturnType<typeof parseQuoteWithAI>>;
     try {
       parsed = await parseQuoteWithAI(rawText);
@@ -191,7 +197,7 @@ router.post(
     const [quote] = await db
       .insert(quotesTable)
       .values({
-        weddingId,
+        weddingId: wedding.id,
         vendorName,
         category,
         rawText,
@@ -207,20 +213,8 @@ router.post(
 
 // ── GET /api/quotes?weddingId=:id ─────────────────────────────────────────────
 
-router.get("/", requireAuth, async (req, res) => {
-  const clerkUserId = (req as any).clerkUserId as string;
-  const weddingId = parseInt(req.query["weddingId"] as string, 10);
-
-  if (isNaN(weddingId)) {
-    res.status(400).json({ error: "weddingId query param required" });
-    return;
-  }
-
-  const wedding = await getVerifiedWedding(clerkUserId, weddingId);
-  if (!wedding) {
-    res.status(404).json({ error: "Wedding not found" });
-    return;
-  }
+router.get("/", requireAuth, requireWeddingFromQuery, async (req, res) => {
+  const weddingId = getAuthorizedResource<Wedding>(req).id;
 
   const quotes = await db
     .select()
@@ -236,53 +230,9 @@ router.get("/", requireAuth, async (req, res) => {
 // be selected at a time — selecting a new one clears any existing selection in
 // the same category.
 
-router.patch("/:id/select", requireAuth, async (req, res) => {
-  const clerkUserId = (req as any).clerkUserId as string;
-  const quoteId = parseInt(req.params["id"] as string, 10);
-
-  if (isNaN(quoteId)) {
-    res.status(400).json({ error: "Invalid quote id" });
-    return;
-  }
-
-  const users = await db
-    .select()
-    .from(usersTable)
-    .where(eq(usersTable.clerkId, clerkUserId))
-    .limit(1);
-  if (users.length === 0) {
-    res.status(404).json({ error: "User not found" });
-    return;
-  }
-
-  const existing = await db
-    .select()
-    .from(quotesTable)
-    .where(eq(quotesTable.id, quoteId))
-    .limit(1);
-
-  if (existing.length === 0) {
-    res.status(404).json({ error: "Quote not found" });
-    return;
-  }
-
-  const quote = existing[0];
-
-  const weddings = await db
-    .select()
-    .from(weddingsTable)
-    .where(
-      and(
-        eq(weddingsTable.id, quote.weddingId),
-        eq(weddingsTable.userId, users[0].id)
-      )
-    )
-    .limit(1);
-
-  if (weddings.length === 0) {
-    res.status(403).json({ error: "Forbidden" });
-    return;
-  }
+router.patch("/:id/select", requireAuth, requireQuoteFromParams, async (req, res) => {
+  const { quote } = getAuthorizedResource<AuthorizedQuote>(req);
+  const quoteId = quote.id;
 
   // Toggle: if already selected, deselect; otherwise select (and clear others in same category)
   const isSelected = quote.selectedAt !== null;
@@ -318,53 +268,8 @@ router.patch("/:id/select", requireAuth, async (req, res) => {
 
 // ── DELETE /api/quotes/:id ────────────────────────────────────────────────────
 
-router.delete("/:id", requireAuth, async (req, res) => {
-  const clerkUserId = (req as any).clerkUserId as string;
-  const quoteId = parseInt(req.params["id"] as string, 10);
-
-  if (isNaN(quoteId)) {
-    res.status(400).json({ error: "Invalid quote id" });
-    return;
-  }
-
-  // Verify ownership via the wedding
-  const users = await db
-    .select()
-    .from(usersTable)
-    .where(eq(usersTable.clerkId, clerkUserId))
-    .limit(1);
-  if (users.length === 0) {
-    res.status(404).json({ error: "User not found" });
-    return;
-  }
-
-  const existing = await db
-    .select({ id: quotesTable.id, weddingId: quotesTable.weddingId })
-    .from(quotesTable)
-    .where(eq(quotesTable.id, quoteId))
-    .limit(1);
-
-  if (existing.length === 0) {
-    res.status(404).json({ error: "Quote not found" });
-    return;
-  }
-
-  // Verify the quote's wedding belongs to the user
-  const weddings = await db
-    .select()
-    .from(weddingsTable)
-    .where(
-      and(
-        eq(weddingsTable.id, existing[0].weddingId),
-        eq(weddingsTable.userId, users[0].id)
-      )
-    )
-    .limit(1);
-
-  if (weddings.length === 0) {
-    res.status(403).json({ error: "Forbidden" });
-    return;
-  }
+router.delete("/:id", requireAuth, requireQuoteFromParams, async (req, res) => {
+  const quoteId = getAuthorizedResource<AuthorizedQuote>(req).quote.id;
 
   await db.delete(quotesTable).where(eq(quotesTable.id, quoteId));
   res.status(204).end();
