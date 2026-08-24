@@ -18,6 +18,8 @@ interface TimelineData { id: number; weddingId: number; generatedAt: string; tas
 interface WeddingData { id: number; weddingDate: string; city: string; guestCount: number; style: string; }
 
 type DashboardState =
+  | { kind: "loading" }
+  | { kind: "load-error"; detail: string }
   | { kind: "form" }
   | { kind: "generating"; weddingId: number }
   | { kind: "failed"; weddingId: number; retriesRemaining: number; detail?: string | null }
@@ -403,45 +405,64 @@ function FailedState({ weddingId, retriesRemaining, detail, onRetry, onStartOver
 export function Dashboard() {
   const { user, isLoaded } = useUser();
   const { signOut } = useClerk();
-  const [state, setState] = useState<DashboardState>({ kind: "form" });
+  const clerkUserId = user?.id;
+  const [state, setState] = useState<DashboardState>({ kind: "loading" });
   const [activeTab, setActiveTab] = useState<DashboardTab>("timeline");
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
-  // JIT-provision DB user + load existing timeline on mount
+  // JIT-provision the DB user, then resolve the current wedding server-side.
   useEffect(() => {
-    if (!isLoaded || !user) return;
+    if (!isLoaded || !clerkUserId) return;
+    let cancelled = false;
 
-    const provision = async () => {
+    const loadCurrentWedding = async () => {
+      setState({ kind: "loading" });
       try {
-        await fetch(`${apiBase}/users/me`, { method: "POST", credentials: "include" });
-      } catch { /* best-effort */ }
-    };
+        const provisionResponse = await fetch(`${apiBase}/users/me`, {
+          method: "POST",
+          credentials: "include",
+        });
+        if (!provisionResponse.ok) {
+          throw new Error("We couldn't prepare your account.");
+        }
 
-    const loadExisting = async () => {
-      // Check if user already has a wedding/timeline by trying to generate
-      // with a sentinel — actually, just try GET on a known wedding path.
-      // We'll check via POST /timelines/generate — if it returns 200 (cached) or 202, we pick up there.
-      // But we don't want to auto-submit the form. Instead, store weddingId in localStorage.
-      const storedId = localStorage.getItem("sam_wedding_id");
-      if (!storedId) return;
-      const weddingId = parseInt(storedId, 10);
-      if (isNaN(weddingId)) return;
+        const response = await fetch(`${apiBase}/timelines/current`, {
+          credentials: "include",
+        });
+        const data = await response.json().catch(() => ({}));
 
-      try {
-        const res = await fetch(`${apiBase}/timelines/${weddingId}`, { credentials: "include" });
-        const data = await res.json();
+        if (cancelled) return;
+        if (response.status === 404 && data.code === "NO_WEDDING") {
+          setState({ kind: "form" });
+          return;
+        }
+        if (!response.ok) {
+          throw new Error(data.error ?? "We couldn't load your wedding plan.");
+        }
+
         if (data.status === "ready") {
           setState({ kind: "ready", timeline: data.timeline, wedding: data.wedding });
         } else if (data.status === "failed") {
-          setState({ kind: "failed", weddingId, retriesRemaining: data.retriesRemaining ?? 3, detail: data.error ?? null });
+          setState({ kind: "failed", weddingId: data.weddingId, retriesRemaining: data.retriesRemaining ?? 3, detail: data.error ?? null });
         } else if (data.status === "generating") {
-          setState({ kind: "generating", weddingId });
+          setState({ kind: "generating", weddingId: data.weddingId });
+        } else {
+          throw new Error("We received an unexpected response while loading your plan.");
         }
-      } catch { /* best-effort */ }
+      } catch (error) {
+        if (cancelled) return;
+        setState({
+          kind: "load-error",
+          detail: error instanceof Error ? error.message : "We couldn't load your wedding plan.",
+        });
+      }
     };
 
-    provision();
-    loadExisting();
-  }, [isLoaded, user]);
+    void loadCurrentWedding();
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoaded, clerkUserId, loadAttempt]);
 
   // Poll when generating
   useEffect(() => {
@@ -466,7 +487,6 @@ export function Dashboard() {
   }, [state]);
 
   const handleFormSubmit = useCallback((weddingId: number) => {
-    localStorage.setItem("sam_wedding_id", String(weddingId));
     setState({ kind: "generating", weddingId });
   }, []);
 
@@ -475,12 +495,10 @@ export function Dashboard() {
   }, []);
 
   const handleStartOver = useCallback(() => {
-    localStorage.removeItem("sam_wedding_id");
     setState({ kind: "form" });
   }, []);
 
   const handleSignOut = () => {
-    localStorage.removeItem("sam_wedding_id");
     signOut({ redirectUrl: basePath || "/" });
   };
 
@@ -508,6 +526,41 @@ export function Dashboard() {
       {/* Main content */}
       <main className="max-w-7xl mx-auto px-6 py-12">
         <AnimatePresence mode="wait">
+          {state.kind === "loading" && (
+            <motion.div key="loading" exit={{ opacity: 0 }}>
+              <p className="text-sm font-semibold tracking-widest uppercase text-accent mb-4">
+                Loading your plan
+              </p>
+              <TimelineSkeleton />
+            </motion.div>
+          )}
+
+          {state.kind === "load-error" && (
+            <motion.div
+              key="load-error"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="max-w-xl"
+            >
+              <p className="text-sm font-semibold tracking-widest uppercase text-red-500 mb-4">
+                Something went wrong
+              </p>
+              <h1 className="text-4xl md:text-5xl font-serif text-primary mb-4">
+                We couldn't load your plan.
+              </h1>
+              <p className="text-muted-foreground leading-relaxed mb-8">
+                {state.detail} Your saved wedding is still safe—try loading it again.
+              </p>
+              <Button
+                onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+                className="h-12 px-8 text-base"
+              >
+                Try again →
+              </Button>
+            </motion.div>
+          )}
+
           {state.kind === "form" && (
             <motion.div key="form" exit={{ opacity: 0 }}>
               <OnboardingForm onSubmit={handleFormSubmit} />

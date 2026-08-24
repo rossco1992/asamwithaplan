@@ -1,8 +1,8 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Response } from "express";
 import { db, usersTable, weddingsTable, timelinesTable } from "@workspace/db";
-import type { TimelineWeek } from "@workspace/db";
+import type { TimelineWeek, Wedding } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { requireAuth } from "../middlewares/requireAuth";
 import { z } from "zod";
 
@@ -18,6 +18,41 @@ const GenerateTimelineBody = z.object({
   guestCount: z.number().int().min(1).max(10000),
   style: z.enum(["intimate", "standard", "large"]),
 });
+
+async function sendTimelineState(res: Response, wedding: Wedding): Promise<void> {
+  const weddingId = wedding.id;
+  const status = wedding.generationStatus;
+
+  if (status === "failed") {
+    res.status(200).json({
+      status: "failed",
+      weddingId,
+      retriesRemaining: MAX_RETRIES - wedding.retryCount,
+      retriesUsed: wedding.retryCount,
+      error: wedding.generationError ?? null,
+    });
+    return;
+  }
+
+  if (status === "generating") {
+    res.status(202).json({ status: "generating", weddingId });
+    return;
+  }
+
+  const timelines = await db
+    .select()
+    .from(timelinesTable)
+    .where(eq(timelinesTable.weddingId, weddingId))
+    .limit(1);
+
+  if (timelines.length === 0) {
+    // Status may be committed just before the timeline row is visible.
+    res.status(202).json({ status: "generating", weddingId });
+    return;
+  }
+
+  res.status(200).json({ status: "ready", timeline: timelines[0], wedding });
+}
 
 // ── System prompt (kept tight — under 300 tokens) ────────────────────────────
 
@@ -120,7 +155,12 @@ router.post("/generate", requireAuth, async (req, res) => {
   const userId = users[0].id;
 
   // One wedding per user — check for existing
-  const existingWeddings = await db.select().from(weddingsTable).where(eq(weddingsTable.userId, userId)).limit(1);
+  const existingWeddings = await db
+    .select()
+    .from(weddingsTable)
+    .where(eq(weddingsTable.userId, userId))
+    .orderBy(desc(weddingsTable.createdAt), desc(weddingsTable.id))
+    .limit(1);
   if (existingWeddings.length > 0) {
     const existing = existingWeddings[0];
     const status = existing.generationStatus;
@@ -146,6 +186,40 @@ router.post("/generate", requireAuth, async (req, res) => {
   generateAndStore(wedding.id, weddingDate, city, guestCount, style);
 
   res.status(202).json({ weddingId: wedding.id, status: "generating" });
+});
+
+// ── GET /api/timelines/current ───────────────────────────────────────────────
+// The MVP supports one current wedding per user. Resolve it from the authenticated
+// identity so browser-local state is never the source of truth. Ordering keeps the
+// behavior deterministic if legacy data contains more than one wedding row.
+
+router.get("/current", requireAuth, async (req, res) => {
+  const clerkUserId = (req as any).clerkUserId as string;
+
+  const users = await db
+    .select()
+    .from(usersTable)
+    .where(eq(usersTable.clerkId, clerkUserId))
+    .limit(1);
+
+  if (users.length === 0) {
+    res.status(404).json({ error: "User not found", code: "USER_NOT_FOUND" });
+    return;
+  }
+
+  const weddings = await db
+    .select()
+    .from(weddingsTable)
+    .where(eq(weddingsTable.userId, users[0].id))
+    .orderBy(desc(weddingsTable.createdAt), desc(weddingsTable.id))
+    .limit(1);
+
+  if (weddings.length === 0) {
+    res.status(404).json({ error: "Wedding not found", code: "NO_WEDDING" });
+    return;
+  }
+
+  await sendTimelineState(res, weddings[0]);
 });
 
 // ── POST /api/timelines/:weddingId/retry ──────────────────────────────────────
@@ -249,33 +323,7 @@ router.get("/:weddingId", requireAuth, async (req, res) => {
     return;
   }
 
-  const wedding = weddings[0];
-  const status = wedding.generationStatus;
-
-  if (status === "failed") {
-    res.status(200).json({
-      status: "failed",
-      retriesRemaining: MAX_RETRIES - wedding.retryCount,
-      retriesUsed: wedding.retryCount,
-      error: wedding.generationError ?? null,
-    });
-    return;
-  }
-
-  if (status === "generating") {
-    res.status(202).json({ status: "generating" });
-    return;
-  }
-
-  // Ready — return timeline
-  const timelines = await db.select().from(timelinesTable).where(eq(timelinesTable.weddingId, weddingId)).limit(1);
-  if (timelines.length === 0) {
-    // Status says ready but no row yet — treat as still generating
-    res.status(202).json({ status: "generating" });
-    return;
-  }
-
-  res.json({ status: "ready", timeline: timelines[0], wedding });
+  await sendTimelineState(res, weddings[0]);
 });
 
 export default router;

@@ -14,6 +14,19 @@ with Node, Postgres, and API keys for Clerk (auth) and OpenAI.
 - **AI:** OpenAI (`lib/integrations-openai-ai-server`)
 - pnpm workspace, Node 24+, TypeScript 5.9
 
+## Wedding state model
+
+The current MVP intentionally supports one current wedding per authenticated
+user. `GET /api/timelines/current` resolves that wedding from the Clerk session
+and returns its timeline status, so browser storage is not the source of truth.
+The dashboard therefore restores on a new browser or device after sign-in.
+
+`POST /api/timelines/generate` reuses an existing wedding instead of creating a
+second one. Both generation and current-wedding resolution choose the most
+recent row deterministically if legacy data contains duplicates. Supporting
+multiple weddings will require an explicit active-wedding field and selection
+workflow; it is not implicit in the current data model.
+
 ## What you need to supply
 
 Replit used to broker these; now you bring your own (all have free tiers):
