@@ -118,12 +118,31 @@ This runs as-is on any Node host — a VPS, Docker, Render, Railway, Fly, etc.
 
 ## Useful scripts
 
+- `pnpm test` — run the deterministic API integration and authorization suites
 - `pnpm typecheck` — full workspace typecheck
 - `pnpm build:web` — build frontend + API for production
+- `pnpm ci` — run the same test, typecheck, and production-build gate as CI
 - `pnpm start` — run the single production server
 - `pnpm db:push` — sync the Drizzle schema to `DATABASE_URL`
 - [`docs/authorization-audit.md`](docs/authorization-audit.md) — API ownership
   boundaries and enforcement matrix
+
+## Automated testing
+
+The API uses Node's built-in test runner with `tsx` for TypeScript test files.
+The critical-flow suite starts the real Express routers on an ephemeral local
+port, provides deterministic in-memory database responses, and replaces OpenAI
+completion calls with queued fixtures. It therefore needs no live Postgres,
+Clerk, or OpenAI credentials.
+
+Run the complete local/CI gate with non-production placeholder values:
+
+```bash
+PORT=4173 \
+BASE_PATH=/ \
+VITE_CLERK_PUBLISHABLE_KEY=pk_test_validation \
+pnpm ci
+```
 
 ## Debugging timeline generation
 

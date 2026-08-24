@@ -4,6 +4,12 @@ packages:
   - lib/integrations/*
   - scripts
 
+allowBuilds:
+  '@clerk/shared': false
+  browser-tabs-lock: false
+  core-js: false
+  esbuild: true
+
 autoInstallPeers: false
 
 catalog:
