@@ -1,9 +1,17 @@
 import { Router, type IRouter, type Response } from "express";
-import { db, usersTable, weddingsTable, timelinesTable } from "@workspace/db";
+import { db, weddingsTable, timelinesTable } from "@workspace/db";
 import type { TimelineWeek, Wedding } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { desc, eq } from "drizzle-orm";
 import { requireAuth } from "../middlewares/requireAuth";
+import {
+  getAuthenticatedUser,
+  getAuthorizedWedding,
+} from "../lib/authorization";
+import {
+  getAuthorizedResource,
+  requireResourceAccess,
+} from "../lib/resourceAccess";
 import { z } from "zod";
 
 const router: IRouter = Router();
@@ -17,6 +25,13 @@ const GenerateTimelineBody = z.object({
   city: z.string().min(1).max(100),
   guestCount: z.number().int().min(1).max(10000),
   style: z.enum(["intimate", "standard", "large"]),
+});
+
+const requireWeddingFromParams = requireResourceAccess<Wedding>({
+  resolveId: (req) => req.params["weddingId"],
+  lookup: getAuthorizedWedding,
+  invalidIdError: "Invalid weddingId",
+  notFoundError: "Wedding not found",
 });
 
 async function sendTimelineState(res: Response, wedding: Wedding): Promise<void> {
@@ -147,12 +162,12 @@ router.post("/generate", requireAuth, async (req, res) => {
   const { weddingDate, city, guestCount, style } = bodyResult.data;
 
   // Look up internal user
-  const users = await db.select().from(usersTable).where(eq(usersTable.clerkId, clerkUserId)).limit(1);
-  if (users.length === 0) {
+  const user = await getAuthenticatedUser(clerkUserId);
+  if (!user) {
     res.status(404).json({ error: "User not found. POST /api/users/me first." });
     return;
   }
-  const userId = users[0].id;
+  const userId = user.id;
 
   // One wedding per user — check for existing
   const existingWeddings = await db
@@ -196,13 +211,8 @@ router.post("/generate", requireAuth, async (req, res) => {
 router.get("/current", requireAuth, async (req, res) => {
   const clerkUserId = (req as any).clerkUserId as string;
 
-  const users = await db
-    .select()
-    .from(usersTable)
-    .where(eq(usersTable.clerkId, clerkUserId))
-    .limit(1);
-
-  if (users.length === 0) {
+  const user = await getAuthenticatedUser(clerkUserId);
+  if (!user) {
     res.status(404).json({ error: "User not found", code: "USER_NOT_FOUND" });
     return;
   }
@@ -210,7 +220,7 @@ router.get("/current", requireAuth, async (req, res) => {
   const weddings = await db
     .select()
     .from(weddingsTable)
-    .where(eq(weddingsTable.userId, users[0].id))
+    .where(eq(weddingsTable.userId, user.id))
     .orderBy(desc(weddingsTable.createdAt), desc(weddingsTable.id))
     .limit(1);
 
@@ -224,29 +234,10 @@ router.get("/current", requireAuth, async (req, res) => {
 
 // ── POST /api/timelines/:weddingId/retry ──────────────────────────────────────
 
-router.post("/:weddingId/retry", requireAuth, async (req, res) => {
-  const clerkUserId = (req as any).clerkUserId as string;
-  const weddingId = parseInt(req.params["weddingId"] as string, 10);
+router.post("/:weddingId/retry", requireAuth, requireWeddingFromParams, async (req, res) => {
+  const wedding = getAuthorizedResource<Wedding>(req);
+  const weddingId = wedding.id;
 
-  if (isNaN(weddingId)) {
-    res.status(400).json({ error: "Invalid weddingId" });
-    return;
-  }
-
-  // Verify ownership
-  const users = await db.select().from(usersTable).where(eq(usersTable.clerkId, clerkUserId)).limit(1);
-  if (users.length === 0) {
-    res.status(404).json({ error: "User not found" });
-    return;
-  }
-
-  const weddings = await db.select().from(weddingsTable).where(eq(weddingsTable.id, weddingId)).limit(1);
-  if (weddings.length === 0 || weddings[0].userId !== users[0].id) {
-    res.status(404).json({ error: "Wedding not found" });
-    return;
-  }
-
-  const wedding = weddings[0];
   if (wedding.generationStatus !== "failed") {
     res.status(409).json({ error: "Timeline is not in a failed state" });
     return;
@@ -272,26 +263,8 @@ router.post("/:weddingId/retry", requireAuth, async (req, res) => {
 // Start over: removes the wedding + its timeline so the user can re-onboard.
 // This is the escape hatch when retries are exhausted (retryCount >= MAX_RETRIES).
 
-router.delete("/:weddingId", requireAuth, async (req, res) => {
-  const clerkUserId = (req as any).clerkUserId as string;
-  const weddingId = parseInt(req.params["weddingId"] as string, 10);
-
-  if (isNaN(weddingId)) {
-    res.status(400).json({ error: "Invalid weddingId" });
-    return;
-  }
-
-  const users = await db.select().from(usersTable).where(eq(usersTable.clerkId, clerkUserId)).limit(1);
-  if (users.length === 0) {
-    res.status(404).json({ error: "User not found" });
-    return;
-  }
-
-  const weddings = await db.select().from(weddingsTable).where(eq(weddingsTable.id, weddingId)).limit(1);
-  if (weddings.length === 0 || weddings[0].userId !== users[0].id) {
-    res.status(404).json({ error: "Wedding not found" });
-    return;
-  }
+router.delete("/:weddingId", requireAuth, requireWeddingFromParams, async (req, res) => {
+  const weddingId = getAuthorizedResource<Wedding>(req).id;
 
   // Remove the timeline first (FK), then the wedding.
   await db.delete(timelinesTable).where(eq(timelinesTable.weddingId, weddingId));
@@ -302,28 +275,10 @@ router.delete("/:weddingId", requireAuth, async (req, res) => {
 
 // ── GET /api/timelines/:weddingId ─────────────────────────────────────────────
 
-router.get("/:weddingId", requireAuth, async (req, res) => {
-  const clerkUserId = (req as any).clerkUserId as string;
-  const weddingId = parseInt(req.params["weddingId"] as string, 10);
+router.get("/:weddingId", requireAuth, requireWeddingFromParams, async (req, res) => {
+  const wedding = getAuthorizedResource<Wedding>(req);
 
-  if (isNaN(weddingId)) {
-    res.status(400).json({ error: "Invalid weddingId" });
-    return;
-  }
-
-  const users = await db.select().from(usersTable).where(eq(usersTable.clerkId, clerkUserId)).limit(1);
-  if (users.length === 0) {
-    res.status(404).json({ error: "User not found" });
-    return;
-  }
-
-  const weddings = await db.select().from(weddingsTable).where(eq(weddingsTable.id, weddingId)).limit(1);
-  if (weddings.length === 0 || weddings[0].userId !== users[0].id) {
-    res.status(404).json({ error: "Wedding not found" });
-    return;
-  }
-
-  await sendTimelineState(res, weddings[0]);
+  await sendTimelineState(res, wedding);
 });
 
 export default router;
