@@ -97,24 +97,25 @@ This runs as-is on any Node host — a VPS, Docker, Render, Railway, Fly, etc.
 
 **api-server** (`artifacts/api-server/.env`)
 
-| Var | Required | Notes |
-|---|---|---|
-| `PORT` | yes | Server port |
-| `DATABASE_URL` | yes | Postgres connection string |
-| `OPENAI_API_KEY` | yes | OpenAI key |
-| `OPENAI_BASE_URL` | no | Only for a proxy / compatible gateway |
-| `CLERK_SECRET_KEY` | yes | Clerk secret key |
-| `CLERK_PUBLISHABLE_KEY` | yes | Clerk publishable key |
-| `STATIC_DIR` | no | Override built-frontend path |
+| Var                        | Required    | Notes                                 |
+| -------------------------- | ----------- | ------------------------------------- |
+| `PORT`                     | yes         | Server port                           |
+| `DATABASE_URL`             | yes         | Postgres connection string            |
+| `OPENAI_API_KEY`           | yes         | OpenAI key                            |
+| `OPENAI_BASE_URL`          | no          | Only for a proxy / compatible gateway |
+| `CLERK_SECRET_KEY`         | yes         | Clerk secret key                      |
+| `CLERK_PUBLISHABLE_KEY`    | yes         | Clerk publishable key                 |
+| `CLERK_AUTHORIZED_PARTIES` | recommended | Comma-separated allowed app origins   |
+| `STATIC_DIR`               | no          | Override built-frontend path          |
 
 **frontend** (`artifacts/marrymap/.env`, build-time)
 
-| Var | Required | Notes |
-|---|---|---|
-| `PORT` | yes (dev) | Vite dev server port |
-| `BASE_PATH` | yes | App base path — use `/` |
-| `VITE_CLERK_PUBLISHABLE_KEY` | yes | Same as api `CLERK_PUBLISHABLE_KEY` |
-| `API_PROXY_TARGET` | no | Dev only; default `http://localhost:3001` |
+| Var                          | Required  | Notes                                     |
+| ---------------------------- | --------- | ----------------------------------------- |
+| `PORT`                       | yes (dev) | Vite dev server port                      |
+| `BASE_PATH`                  | yes       | App base path — use `/`                   |
+| `VITE_CLERK_PUBLISHABLE_KEY` | yes       | Same as api `CLERK_PUBLISHABLE_KEY`       |
+| `API_PROXY_TARGET`           | no        | Dev only; default `http://localhost:3001` |
 
 ## Useful scripts
 
@@ -126,6 +127,8 @@ This runs as-is on any Node host — a VPS, Docker, Render, Railway, Fly, etc.
 - `pnpm db:push` — sync the Drizzle schema to `DATABASE_URL`
 - [`docs/authorization-audit.md`](docs/authorization-audit.md) — API ownership
   boundaries and enforcement matrix
+- [`docs/netlify-beta.md`](docs/netlify-beta.md) — deploy the private beta app
+  as a second Netlify site without replacing the public landing page
 
 ## Automated testing
 

@@ -1,0 +1,25 @@
+[build]
+  command = "pnpm --filter @workspace/marrymap build"
+  publish = "artifacts/marrymap/dist/public"
+
+[build.environment]
+  NODE_VERSION = "24"
+  PNPM_VERSION = "11.19.0"
+  PORT = "4173"
+  BASE_PATH = "/"
+
+[functions]
+  directory = "artifacts/marrymap/netlify/functions"
+  node_bundler = "esbuild"
+  external_node_modules = ["serverless-http"]
+
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
