@@ -1,0 +1,9 @@
+{
+  "name": "serverless-http",
+  "version": "4.0.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "serverless-http.js",
+  "types": "serverless-http.d.ts",
+  "license": "MIT"
+}

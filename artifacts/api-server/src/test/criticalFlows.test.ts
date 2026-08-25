@@ -11,6 +11,10 @@ const dbModule = await import("@workspace/db");
 const { db, quotesTable, timelinesTable, usersTable, weddingsTable } = dbModule;
 const { openai } = await import("@workspace/integrations-openai-ai-server");
 const { default: apiRouter } = await import("../routes/index");
+const { dispatchTimelineGeneration } =
+  await import("../services/timelineGeneration");
+const { default: serverless } =
+  await import("../../../../lib/serverless-http/serverless-http.js");
 
 type OperationKind = "select" | "insert" | "update" | "delete";
 
@@ -327,6 +331,17 @@ async function waitFor(condition: () => boolean, timeoutMs = 2_000) {
   }
 }
 
+function restoreEnvironmentVariable(
+  name: string,
+  value: string | undefined,
+): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}
+
 const createdAt = new Date("2026-08-24T12:00:00.000Z");
 const user = {
   id: 1,
@@ -380,6 +395,86 @@ const quote = {
 };
 
 describe("critical MVP API flows", { concurrency: false }, () => {
+  test("adapts Express routes to Netlify's AWS-compatible function event", async () => {
+    const netlifyApp = express();
+    netlifyApp.get("/api/healthz", (_req, res) => {
+      res.status(200).json({ ok: true });
+    });
+    const handler = serverless(netlifyApp);
+
+    const response = (await handler(
+      {
+        httpMethod: "GET",
+        path: "/api/healthz",
+        headers: { host: "beta.example.test" },
+        multiValueHeaders: {},
+        queryStringParameters: null,
+        multiValueQueryStringParameters: null,
+        body: null,
+        isBase64Encoded: false,
+        requestContext: {
+          requestId: "netlify-test",
+          identity: { sourceIp: "127.0.0.1" },
+        },
+      },
+      {},
+    )) as { statusCode: number; body: string };
+
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(JSON.parse(response.body), { ok: true });
+  });
+
+  test("queues timeline work through the protected Netlify background function", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalNetlify = process.env.NETLIFY;
+    const originalSiteId = process.env.SITE_ID;
+    const originalUrl = process.env.URL;
+    const originalSecret = process.env.NETLIFY_BACKGROUND_SECRET;
+    let request: { input: string; init?: RequestInit } | undefined;
+
+    delete process.env.NETLIFY;
+    process.env.SITE_ID = "netlify-site-test";
+    process.env.URL = "https://beta.example.test/";
+    process.env.NETLIFY_BACKGROUND_SECRET = "test-background-secret";
+    globalThis.fetch = async (input, init) => {
+      request = { input: String(input), init };
+      return new Response(null, { status: 202 });
+    };
+
+    try {
+      await dispatchTimelineGeneration({
+        weddingId: generatingWedding.id,
+        weddingDate: generatingWedding.weddingDate,
+        city: generatingWedding.city,
+        guestCount: generatingWedding.guestCount,
+        style: generatingWedding.style,
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+      restoreEnvironmentVariable("NETLIFY", originalNetlify);
+      restoreEnvironmentVariable("SITE_ID", originalSiteId);
+      restoreEnvironmentVariable("URL", originalUrl);
+      restoreEnvironmentVariable("NETLIFY_BACKGROUND_SECRET", originalSecret);
+    }
+
+    assert.equal(
+      request?.input,
+      "https://beta.example.test/.netlify/functions/timeline-generation-background",
+    );
+    assert.equal(request?.init?.method, "POST");
+    assert.deepEqual(request?.init?.headers, {
+      authorization: "Bearer test-background-secret",
+      "content-type": "application/json",
+    });
+    assert.deepEqual(JSON.parse(String(request?.init?.body)), {
+      weddingId: generatingWedding.id,
+      weddingDate: generatingWedding.weddingDate,
+      city: generatingWedding.city,
+      guestCount: generatingWedding.guestCount,
+      style: generatingWedding.style,
+    });
+  });
+
   test("requires a verified Clerk user before protected work", async () => {
     await withHarness({}, [], async ({ db: dbHarness, ai }) => {
       const response = await apiRequest("/timelines/current", { userId: null });
