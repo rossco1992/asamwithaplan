@@ -28,8 +28,8 @@ export function Financials() {
           {[
             {
               title: "Quote Analyzer",
-              value: "-12%",
-              label: "Average savings",
+              value: "Side by side",
+              label: "Your vendor quotes",
               desc: "Upload vendor quotes. We normalize line items to ensure you are comparing apples to apples across caterers."
             },
             {

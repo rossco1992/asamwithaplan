@@ -10,7 +10,7 @@ export function Features() {
     },
     {
       title: "Vendor quote comparison",
-      description: "Line up competing quotes side by side. We'll automatically flag pricing that falls outside the normal range for your area.",
+      description: "Line up the quotes you add side by side. Sam highlights totals that are more than 20% above the median of your other quotes in the same category.",
       icon: <TrendingDown className="w-5 h-5 text-accent" />,
     },
     {

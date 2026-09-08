@@ -10,7 +10,7 @@ export function Features() {
     },
     {
       title: "Vendor quote comparison",
-      description: "Line up competing quotes side by side, with pricing that looks out of range for your area flagged automatically.",
+      description: "Line up the quotes you add side by side, with higher totals called out using only your other quotes in the same category.",
       icon: <TrendingDown className="w-5 h-5 text-accent" />,
     },
     {
