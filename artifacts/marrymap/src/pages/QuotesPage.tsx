@@ -1,6 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
+import {
+  QUOTE_COMPARISON_EXPLANATION,
+  compareQuoteToPeers,
+  comparisonSummary,
+  median,
+} from "@/lib/quoteComparison";
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 const apiBase = basePath ? `${basePath}/api` : "/api";
@@ -63,16 +69,15 @@ function fmt(amount: number, currency: string) {
   }
 }
 
-/** Returns true if the amount is >20% above the median of the group. */
-function isOverpriced(amount: number, groupAmounts: number[]): boolean {
-  if (groupAmounts.length < 2) return false;
-  const sorted = [...groupAmounts].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  const median =
-    sorted.length % 2 !== 0
-      ? sorted[mid]
-      : (sorted[mid - 1] + sorted[mid]) / 2;
-  return amount > median * 1.2;
+function isHigherThanPeers(quote: Quote, categoryQuotes: Quote[]): boolean {
+  return (
+    compareQuoteToPeers(
+      quote.totalAmount,
+      categoryQuotes
+        .filter((peer) => peer.id !== quote.id)
+        .map((peer) => peer.totalAmount),
+    ).state === "higher-than-peers"
+  );
 }
 
 // ── Budget Summary ────────────────────────────────────────────────────────────
@@ -421,13 +426,13 @@ function AddQuoteForm({ weddingId, onAdded, onCancel }: AddQuoteFormProps) {
 
 interface QuoteCardProps {
   quote: Quote;
-  overpriced: boolean;
+  higherThanPeers: boolean;
   onDelete: (id: number) => void;
   onToggleSelect: (quoteId: number) => void;
   selectingId: number | null;
 }
 
-function QuoteCard({ quote, overpriced, onDelete, onToggleSelect, selectingId }: QuoteCardProps) {
+function QuoteCard({ quote, higherThanPeers, onDelete, onToggleSelect, selectingId }: QuoteCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -458,7 +463,7 @@ function QuoteCard({ quote, overpriced, onDelete, onToggleSelect, selectingId }:
       className={`bg-card rounded-xl border p-5 flex flex-col gap-3 transition-colors ${
         isSelected
           ? "border-primary/30 ring-1 ring-primary/10"
-          : overpriced
+          : higherThanPeers
           ? "border-amber-300/60"
           : "border-border"
       }`}
@@ -477,9 +482,9 @@ function QuoteCard({ quote, overpriced, onDelete, onToggleSelect, selectingId }:
           <span className="text-base font-semibold text-primary">
             {fmt(quote.totalAmount, quote.currency)}
           </span>
-          {overpriced && !isSelected && (
+          {higherThanPeers && (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-sm text-[10px] font-semibold tracking-wider uppercase bg-amber-50 text-amber-700 border border-amber-200">
-              ⚠ Above market
+              Higher than your other quotes
             </span>
           )}
           {isSelected && (
@@ -577,6 +582,7 @@ function CategoryGroup({ category, quotes, onDelete, onToggleSelect, selectingId
   selectingId: number | null;
 }) {
   const amounts = quotes.map((q) => q.totalAmount);
+  const categoryMedian = median(amounts);
 
   return (
     <div>
@@ -589,16 +595,7 @@ function CategoryGroup({ category, quotes, onDelete, onToggleSelect, selectingId
         </span>
         {quotes.length >= 2 && (
           <span className="text-xs text-muted-foreground/60 ml-auto">
-            Median: {fmt(
-              (() => {
-                const sorted = [...amounts].sort((a, b) => a - b);
-                const mid = Math.floor(sorted.length / 2);
-                return sorted.length % 2 !== 0
-                  ? sorted[mid]
-                  : (sorted[mid - 1] + sorted[mid]) / 2;
-              })(),
-              quotes[0].currency
-            )}
+            Median of these quotes: {fmt(categoryMedian ?? 0, quotes[0].currency)}
           </span>
         )}
       </div>
@@ -608,7 +605,7 @@ function CategoryGroup({ category, quotes, onDelete, onToggleSelect, selectingId
             <QuoteCard
               key={q.id}
               quote={q}
-              overpriced={isOverpriced(q.totalAmount, amounts)}
+              higherThanPeers={isHigherThanPeers(q, quotes)}
               onDelete={onDelete}
               onToggleSelect={onToggleSelect}
               selectingId={selectingId}
@@ -699,10 +696,14 @@ export function QuotesPage({ weddingId }: QuotesPageProps) {
     byCategory[q.category].push(q);
   }
 
-  const overpricedCount = quotes.filter((q) => {
+  const higherThanPeersCount = quotes.filter((q) => {
     const group = byCategory[q.category] ?? [];
-    return isOverpriced(q.totalAmount, group.map((g) => g.totalAmount));
+    return isHigherThanPeers(q, group);
   }).length;
+  const higherThanPeersSummary = comparisonSummary(higherThanPeersCount);
+  const hasComparableQuotes = categoriesWithQuotes.some(
+    (category) => (byCategory[category]?.length ?? 0) >= 2,
+  );
 
   return (
     <div>
@@ -713,11 +714,16 @@ export function QuotesPage({ weddingId }: QuotesPageProps) {
             Vendor quotes
           </p>
           <h2 className="text-3xl font-serif text-primary">
-            Compare & spot overpriced offers
+            Compare vendor offers side by side
           </h2>
-          {overpricedCount > 0 && (
+          {higherThanPeersSummary && (
             <p className="text-sm text-amber-600 mt-2">
-              ⚠ {overpricedCount} quote{overpricedCount !== 1 ? "s are" : " is"} above market price for your area
+              {higherThanPeersSummary}
+            </p>
+          )}
+          {hasComparableQuotes && (
+            <p className="text-xs text-muted-foreground mt-2 max-w-2xl">
+              {QUOTE_COMPARISON_EXPLANATION}
             </p>
           )}
         </div>
