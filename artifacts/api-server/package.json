@@ -8,6 +8,7 @@
     "dev:local": "export NODE_ENV=development && pnpm run build && node --enable-source-maps --env-file=.env ./dist/index.mjs",
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
+    "ai:report": "tsx src/scripts/aiMetricsReport.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test src/lib/*.test.mjs src/test/*.test.ts"
   },

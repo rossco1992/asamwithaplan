@@ -3,8 +3,22 @@ import type { TimelineWeek } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
+import { logger } from "../lib/logger";
+import {
+  AiWorkflowError,
+  GPT_5_NANO_MODEL,
+  getSafeErrorDiagnostics,
+  observeAiWorkflow,
+  recordAiWorkflowFailure,
+} from "./aiTelemetry";
+
+export const MAX_TIMELINE_RETRIES = 10;
+export const MAX_TIMELINE_ATTEMPTS = MAX_TIMELINE_RETRIES + 1;
 
 export const TimelineGenerationJobSchema = z.object({
+  runId: z.string().uuid(),
+  requestId: z.string().min(1).max(200),
+  attempt: z.number().int().min(1).max(MAX_TIMELINE_ATTEMPTS),
   weddingId: z.number().int().positive(),
   weddingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   city: z.string().min(1).max(100),
@@ -13,6 +27,27 @@ export const TimelineGenerationJobSchema = z.object({
 });
 
 export type TimelineGenerationJob = z.infer<typeof TimelineGenerationJobSchema>;
+
+const TimelineResponseSchema = z.object({
+  weeks: z
+    .array(
+      z.object({
+        weekLabel: z.string().min(1).max(100),
+        phase: z.string().min(1).max(100),
+        tasks: z
+          .array(
+            z.object({
+              title: z.string().min(1).max(500),
+              priority: z.enum(["urgent", "this-week", "upcoming"]),
+            }),
+          )
+          .min(1)
+          .max(3),
+      }),
+    )
+    .min(1)
+    .max(24),
+});
 
 function buildSystemPrompt(): string {
   return `You are a wedding planning assistant. Return ONLY valid JSON with no prose or markdown.
@@ -35,83 +70,126 @@ function buildUserPrompt(job: TimelineGenerationJob): string {
 }
 
 export async function recordTimelineGenerationFailure(
-  weddingId: number,
+  job: Pick<
+    TimelineGenerationJob,
+    "weddingId" | "runId" | "requestId" | "attempt"
+  >,
   error: unknown,
+  options: { recordTelemetry?: boolean } = {},
 ): Promise<void> {
-  const message = error instanceof Error ? error.message : String(error);
-  const status = (error as { status?: unknown } | null)?.status;
-  const code = (error as { code?: unknown } | null)?.code;
-  const detail = [status && `HTTP ${status}`, code, message]
+  const diagnostics = getSafeErrorDiagnostics(error);
+  const detail = [
+    diagnostics.errorCategory,
+    diagnostics.providerStatus && `HTTP ${diagnostics.providerStatus}`,
+    diagnostics.providerCode,
+  ]
     .filter(Boolean)
     .join(" · ");
 
-  console.error(
-    `[timelines] generation failed for wedding ${weddingId}`,
-    { message, status, code },
-    error,
+  logger.error(
+    {
+      event: "timeline_generation_state_failed",
+      workflow: "timeline_generation",
+      model: GPT_5_NANO_MODEL,
+      weddingId: job.weddingId,
+      runId: job.runId,
+      requestId: job.requestId,
+      attempt: job.attempt,
+      maxAttempts: MAX_TIMELINE_ATTEMPTS,
+      ...diagnostics,
+    },
+    "Timeline generation entered a failed state",
   );
+
+  if (options.recordTelemetry) {
+    await recordAiWorkflowFailure(
+      {
+        runId: job.runId,
+        requestId: job.requestId,
+        weddingId: job.weddingId,
+        workflow: "timeline_generation",
+        model: GPT_5_NANO_MODEL,
+        attempt: job.attempt,
+      },
+      error,
+    );
+  }
 
   await db
     .update(weddingsTable)
     .set({ generationStatus: "failed", generationError: detail })
-    .where(eq(weddingsTable.id, weddingId))
-    .catch((dbError) =>
-      console.error(
-        "[timelines] failed to write failed status",
-        weddingId,
-        dbError,
-      ),
-    );
+    .where(eq(weddingsTable.id, job.weddingId))
+    .catch((dbError) => {
+      logger.error(
+        {
+          event: "timeline_generation_state_write_failed",
+          workflow: "timeline_generation",
+          model: GPT_5_NANO_MODEL,
+          weddingId: job.weddingId,
+          runId: job.runId,
+          requestId: job.requestId,
+          attempt: job.attempt,
+          ...getSafeErrorDiagnostics(dbError),
+        },
+        "Could not persist the failed timeline state",
+      );
+    });
 }
 
 export async function runTimelineGeneration(
   job: TimelineGenerationJob,
 ): Promise<void> {
   try {
-    const completion = await openai.chat.completions.create({
-      model: "gpt-5-nano",
-      response_format: { type: "json_object" },
-      // The completion ceiling covers both hidden reasoning and visible JSON.
-      reasoning_effort: "minimal",
-      max_completion_tokens: 8000,
-      messages: [
-        { role: "system", content: buildSystemPrompt() },
-        { role: "user", content: buildUserPrompt(job) },
-      ],
-    });
+    await observeAiWorkflow(
+      {
+        runId: job.runId,
+        requestId: job.requestId,
+        weddingId: job.weddingId,
+        workflow: "timeline_generation",
+        model: GPT_5_NANO_MODEL,
+        attempt: job.attempt,
+      },
+      async ({ captureUsage }) => {
+        const completion = await openai.chat.completions.create({
+          model: GPT_5_NANO_MODEL,
+          response_format: { type: "json_object" },
+          // The completion ceiling covers both hidden reasoning and visible JSON.
+          reasoning_effort: "minimal",
+          max_completion_tokens: 8000,
+          messages: [
+            { role: "system", content: buildSystemPrompt() },
+            { role: "user", content: buildUserPrompt(job) },
+          ],
+        });
+        captureUsage(completion.usage);
 
-    const usage = completion.usage;
-    console.log(
-      `[timelines] tokens — prompt: ${usage?.prompt_tokens}, completion: ${usage?.completion_tokens}, total: ${usage?.total_tokens}`,
+        const finishReason = completion.choices[0]?.finish_reason;
+        if (finishReason === "length") {
+          throw new AiWorkflowError(
+            "parsing",
+            "Model output was truncated before the JSON document completed",
+          );
+        }
+
+        const raw = completion.choices[0]?.message?.content ?? "{}";
+        const parsed = TimelineResponseSchema.parse(JSON.parse(raw));
+        const weeks: TimelineWeek[] = parsed.weeks;
+
+        await db
+          .delete(timelinesTable)
+          .where(eq(timelinesTable.weddingId, job.weddingId));
+        await db
+          .insert(timelinesTable)
+          .values({ weddingId: job.weddingId, tasks: weeks });
+
+        await db
+          .update(weddingsTable)
+          .set({ generationStatus: "ready", generationError: null })
+          .where(eq(weddingsTable.id, job.weddingId));
+      },
     );
-
-    const raw = completion.choices[0]?.message?.content ?? "{}";
-    const finishReason = completion.choices[0]?.finish_reason;
-    if (finishReason === "length") {
-      console.error(
-        `[timelines] output truncated (finish_reason=length) for wedding ${job.weddingId} — prompt tightening needed`,
-      );
-      throw new Error(
-        "Model output was truncated — reduce max_completion_tokens or prompt size",
-      );
-    }
-
-    const parsed = JSON.parse(raw) as { weeks?: TimelineWeek[] };
-    const weeks: TimelineWeek[] = parsed.weeks ?? [];
-
-    await db
-      .delete(timelinesTable)
-      .where(eq(timelinesTable.weddingId, job.weddingId));
-    await db
-      .insert(timelinesTable)
-      .values({ weddingId: job.weddingId, tasks: weeks });
-
-    await db
-      .update(weddingsTable)
-      .set({ generationStatus: "ready", generationError: null })
-      .where(eq(weddingsTable.id, job.weddingId));
   } catch (error) {
-    await recordTimelineGenerationFailure(job.weddingId, error);
+    await recordTimelineGenerationFailure(job, error);
   }
 }
 
@@ -134,8 +212,20 @@ export async function dispatchTimelineGeneration(
 ): Promise<void> {
   const isNetlifyRuntime =
     process.env.NETLIFY === "true" || Boolean(process.env.SITE_ID);
+  const logFields = {
+    event: "ai_workflow_dispatched",
+    workflow: "timeline_generation",
+    model: GPT_5_NANO_MODEL,
+    weddingId: job.weddingId,
+    runId: job.runId,
+    requestId: job.requestId,
+    attempt: job.attempt,
+    maxAttempts: MAX_TIMELINE_ATTEMPTS,
+    execution: isNetlifyRuntime ? "netlify_background" : "local_background",
+  };
 
   if (!isNetlifyRuntime) {
+    logger.info(logFields, "Timeline generation dispatched");
     void runTimelineGeneration(job);
     return;
   }
@@ -159,4 +249,6 @@ export async function dispatchTimelineGeneration(
       `Netlify background function returned HTTP ${response.status}`,
     );
   }
+
+  logger.info(logFields, "Timeline generation dispatched");
 }

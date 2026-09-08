@@ -15,6 +15,13 @@
       "when": 1784563144371,
       "tag": "0001_long_lily_hollister",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788871877214,
+      "tag": "0002_soft_vector",
+      "breakpoints": true
     }
   ]
 }

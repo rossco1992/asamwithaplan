@@ -122,7 +122,9 @@ This runs as-is on any Node host — a VPS, Docker, Render, Railway, Fly, etc.
 - `pnpm test` — run the deterministic API integration and authorization suites
 - `pnpm typecheck` — full workspace typecheck
 - `pnpm build:web` — build frontend + API for production
-- `pnpm ci` — run the same test, typecheck, and production-build gate as CI
+- `pnpm run ci` — run the same test, typecheck, and production-build gate as CI
+- `DATABASE_URL=postgres://... pnpm ai:report` — print 30-day AI reliability
+  and cost metrics as JSON (set `AI_REPORT_SINCE_DAYS` to change the window)
 - `pnpm start` — run the single production server
 - `pnpm db:push` — sync the Drizzle schema to `DATABASE_URL`
 - [`docs/authorization-audit.md`](docs/authorization-audit.md) — API ownership
@@ -144,13 +146,31 @@ Run the complete local/CI gate with non-production placeholder values:
 PORT=4173 \
 BASE_PATH=/ \
 VITE_CLERK_PUBLISHABLE_KEY=pk_test_validation \
-pnpm ci
+pnpm run ci
 ```
 
-## Debugging timeline generation
+## AI reliability and cost reporting
 
-Timeline generation runs in the background (`generateAndStore` in
-`artifacts/api-server/src/routes/timelines.ts`). On failure the server logs
-`[timelines] generation failed …` with the OpenAI status/code, and the same
-detail is stored and shown in the UI under "Technical detail" on the failed
-screen. On success it logs a token-usage line.
+Timeline generation and quote parsing write one `ai_workflow_runs` row per
+attempt. Each row and its matching structured log include the workflow, model,
+success or failure, safe failure category, latency, token usage, estimated
+cost, attempt number, request ID, and run ID. Prompts, quote text, credentials,
+and provider error messages are deliberately excluded from telemetry.
+
+Timeline retries are bounded at 10 retries (11 total attempts). The original
+HTTP request ID and a unique run ID travel with background jobs so dispatch,
+execution, and completion logs can be correlated. Provider, timeout, JSON
+parsing, output-validation, and application failures use separate categories.
+
+Run the aggregate report against a configured database:
+
+```bash
+DATABASE_URL=postgres://... AI_REPORT_SINCE_DAYS=30 pnpm ai:report
+```
+
+The JSON report groups by workflow and model and shows success rate, p95
+latency, total estimated cost, cost per completed workflow, unpriced attempts,
+and categorized failures. GPT-5 nano estimates use the published standard text
+token prices checked on 2026-09-08; review
+[the model pricing page](https://developers.openai.com/api/docs/models/gpt-5-nano)
+when changing models or pricing.
