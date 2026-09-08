@@ -13,14 +13,15 @@ import {
 } from "../lib/resourceAccess";
 import {
   dispatchTimelineGeneration,
+  MAX_TIMELINE_RETRIES,
   recordTimelineGenerationFailure,
   type TimelineGenerationJob,
 } from "../services/timelineGeneration";
+import { createAiRunId, getRequestId } from "../services/aiTelemetry";
+import { logger } from "../lib/logger";
 import { z } from "zod";
 
 const router: IRouter = Router();
-
-const MAX_RETRIES = 10;
 
 // ── Validation ────────────────────────────────────────────────────────────────
 
@@ -51,7 +52,7 @@ async function sendTimelineState(
     res.status(200).json({
       status: "failed",
       weddingId,
-      retriesRemaining: MAX_RETRIES - wedding.retryCount,
+      retriesRemaining: Math.max(0, MAX_TIMELINE_RETRIES - wedding.retryCount),
       retriesUsed: wedding.retryCount,
       error: wedding.generationError ?? null,
     });
@@ -139,6 +140,9 @@ router.post("/generate", requireAuth, async (req, res) => {
     .returning();
 
   const generationJob: TimelineGenerationJob = {
+    runId: createAiRunId(),
+    requestId: getRequestId(req),
+    attempt: 1,
     weddingId: wedding.id,
     weddingDate,
     city,
@@ -149,7 +153,9 @@ router.post("/generate", requireAuth, async (req, res) => {
   try {
     await dispatchTimelineGeneration(generationJob);
   } catch (error) {
-    await recordTimelineGenerationFailure(wedding.id, error);
+    await recordTimelineGenerationFailure(generationJob, error, {
+      recordTelemetry: true,
+    });
     res.status(503).json({
       error: "Timeline generation could not be started. Please retry.",
       weddingId: wedding.id,
@@ -204,7 +210,18 @@ router.post(
       res.status(409).json({ error: "Timeline is not in a failed state" });
       return;
     }
-    if (wedding.retryCount >= MAX_RETRIES) {
+    if (wedding.retryCount >= MAX_TIMELINE_RETRIES) {
+      logger.warn(
+        {
+          event: "ai_workflow_retry_rejected",
+          workflow: "timeline_generation",
+          weddingId,
+          requestId: getRequestId(req),
+          retriesUsed: wedding.retryCount,
+          maxRetries: MAX_TIMELINE_RETRIES,
+        },
+        "Timeline generation retry limit reached",
+      );
       res
         .status(429)
         .json({ error: "Maximum retries reached. Please contact support." });
@@ -221,16 +238,23 @@ router.post(
       })
       .where(eq(weddingsTable.id, weddingId));
 
+    const generationJob: TimelineGenerationJob = {
+      runId: createAiRunId(),
+      requestId: getRequestId(req),
+      attempt: wedding.retryCount + 2,
+      weddingId,
+      weddingDate: wedding.weddingDate,
+      city: wedding.city,
+      guestCount: wedding.guestCount,
+      style: wedding.style,
+    };
+
     try {
-      await dispatchTimelineGeneration({
-        weddingId,
-        weddingDate: wedding.weddingDate,
-        city: wedding.city,
-        guestCount: wedding.guestCount,
-        style: wedding.style,
-      });
+      await dispatchTimelineGeneration(generationJob);
     } catch (error) {
-      await recordTimelineGenerationFailure(weddingId, error);
+      await recordTimelineGenerationFailure(generationJob, error, {
+        recordTelemetry: true,
+      });
       res.status(503).json({
         error: "Timeline generation could not be restarted. Please retry.",
         weddingId,

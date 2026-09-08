@@ -8,7 +8,14 @@ process.env.DATABASE_URL ??= "postgres://test:test@127.0.0.1:1/test";
 process.env.OPENAI_API_KEY ??= "sk-test-not-a-real-key";
 
 const dbModule = await import("@workspace/db");
-const { db, quotesTable, timelinesTable, usersTable, weddingsTable } = dbModule;
+const {
+  aiWorkflowRunsTable,
+  db,
+  quotesTable,
+  timelinesTable,
+  usersTable,
+  weddingsTable,
+} = dbModule;
 const { openai } = await import("@workspace/integrations-openai-ai-server");
 const { default: apiRouter } = await import("../routes/index");
 const { dispatchTimelineGeneration } =
@@ -443,6 +450,9 @@ describe("critical MVP API flows", { concurrency: false }, () => {
 
     try {
       await dispatchTimelineGeneration({
+        runId: "00000000-0000-4000-8000-000000000001",
+        requestId: "netlify-request-test",
+        attempt: 1,
         weddingId: generatingWedding.id,
         weddingDate: generatingWedding.weddingDate,
         city: generatingWedding.city,
@@ -467,6 +477,9 @@ describe("critical MVP API flows", { concurrency: false }, () => {
       "content-type": "application/json",
     });
     assert.deepEqual(JSON.parse(String(request?.init?.body)), {
+      runId: "00000000-0000-4000-8000-000000000001",
+      requestId: "netlify-request-test",
+      attempt: 1,
       weddingId: generatingWedding.id,
       weddingDate: generatingWedding.weddingDate,
       city: generatingWedding.city,
@@ -548,6 +561,13 @@ describe("critical MVP API flows", { concurrency: false }, () => {
                 ?.generationStatus === "ready",
           ),
         );
+        await waitFor(() =>
+          dbHarness.operations.some(
+            (operation) =>
+              operation.kind === "insert" &&
+              operation.table === aiWorkflowRunsTable,
+          ),
+        );
 
         const weddingInsert = dbHarness.operations.find(
           (operation) =>
@@ -571,6 +591,37 @@ describe("critical MVP API flows", { concurrency: false }, () => {
         });
         assert.equal(ai.calls.length, 1);
         assert.equal((ai.calls[0] as { model: string }).model, "gpt-5-nano");
+
+        const telemetryInsert = dbHarness.operations.find(
+          (operation) =>
+            operation.kind === "insert" &&
+            operation.table === aiWorkflowRunsTable,
+        );
+        const telemetry = telemetryInsert?.values as
+          | Record<string, unknown>
+          | undefined;
+        assert.deepEqual(
+          {
+            workflow: telemetry?.workflow,
+            model: telemetry?.model,
+            status: telemetry?.status,
+            attempt: telemetry?.attempt,
+            promptTokens: telemetry?.promptTokens,
+            completionTokens: telemetry?.completionTokens,
+            totalTokens: telemetry?.totalTokens,
+            estimatedCostUsd: telemetry?.estimatedCostUsd,
+          },
+          {
+            workflow: "timeline_generation",
+            model: "gpt-5-nano",
+            status: "succeeded",
+            attempt: 1,
+            promptTokens: 10,
+            completionTokens: 20,
+            totalTokens: 30,
+            estimatedCostUsd: 0.0000085,
+          },
+        );
       },
     );
   });
@@ -626,6 +677,13 @@ describe("critical MVP API flows", { concurrency: false }, () => {
                 operation.table === weddingsTable,
             ).length === 2,
         );
+        await waitFor(() =>
+          dbHarness.operations.some(
+            (operation) =>
+              operation.kind === "insert" &&
+              operation.table === aiWorkflowRunsTable,
+          ),
+        );
 
         const weddingUpdates = dbHarness.operations.filter(
           (operation) =>
@@ -641,6 +699,15 @@ describe("critical MVP API flows", { concurrency: false }, () => {
           generationError: null,
         });
         assert.equal(ai.calls.length, 1);
+        const retryTelemetry = dbHarness.operations.find(
+          (operation) =>
+            operation.kind === "insert" &&
+            operation.table === aiWorkflowRunsTable,
+        );
+        assert.equal(
+          (retryTelemetry?.values as { attempt?: number })?.attempt,
+          failedWedding.retryCount + 2,
+        );
       },
     );
   });
@@ -712,6 +779,98 @@ describe("critical MVP API flows", { concurrency: false }, () => {
             .selectedAt instanceof Date,
         );
         assert.equal(ai.calls.length, 1);
+
+        const telemetryInsert = dbHarness.operations.find(
+          (operation) =>
+            operation.kind === "insert" &&
+            operation.table === aiWorkflowRunsTable,
+        );
+        assert.equal(
+          (telemetryInsert?.values as { workflow?: string })?.workflow,
+          "quote_parsing",
+        );
+        assert.equal(
+          (telemetryInsert?.values as { status?: string })?.status,
+          "succeeded",
+        );
+      },
+    );
+  });
+
+  test("records a categorized quote parsing failure without storing quote text in telemetry", async () => {
+    await withHarness(
+      {
+        selects: [[{ wedding: readyWedding }]],
+        inserts: [[]],
+      },
+      [{ content: "not valid JSON" }],
+      async ({ db: dbHarness, ai }) => {
+        const response = await apiRequest("/quotes", {
+          method: "POST",
+          body: {
+            weddingId: readyWedding.id,
+            vendorName: quote.vendorName,
+            category: quote.category,
+            rawText: quote.rawText,
+          },
+        });
+
+        assert.equal(response.status, 502);
+        assert.deepEqual(response.body, {
+          error: "Failed to parse quote. Please try again.",
+        });
+        assert.equal(ai.calls.length, 1);
+        assert.equal(
+          dbHarness.operations.some(
+            (operation) =>
+              operation.kind === "insert" && operation.table === quotesTable,
+          ),
+          false,
+        );
+
+        const telemetryInsert = dbHarness.operations.find(
+          (operation) =>
+            operation.kind === "insert" &&
+            operation.table === aiWorkflowRunsTable,
+        );
+        const telemetry = telemetryInsert?.values as
+          Record<string, unknown> | undefined;
+        assert.equal(telemetry?.workflow, "quote_parsing");
+        assert.equal(telemetry?.status, "failed");
+        assert.equal(telemetry?.errorCategory, "parsing");
+        assert.equal(telemetry?.estimatedCostUsd, 0.0000085);
+        assert.equal("rawText" in (telemetry ?? {}), false);
+      },
+    );
+  });
+
+  test("rejects timeline retries after the bounded retry limit", async () => {
+    const exhaustedWedding = {
+      ...generatingWedding,
+      generationStatus: "failed" as const,
+      retryCount: 10,
+      generationError: "timeout",
+    };
+
+    await withHarness(
+      { selects: [[{ wedding: exhaustedWedding }]] },
+      [],
+      async ({ db: dbHarness, ai }) => {
+        const response = await apiRequest(
+          `/timelines/${exhaustedWedding.id}/retry`,
+          { method: "POST" },
+        );
+
+        assert.equal(response.status, 429);
+        assert.deepEqual(response.body, {
+          error: "Maximum retries reached. Please contact support.",
+        });
+        assert.equal(ai.calls.length, 0);
+        assert.ok(
+          dbHarness.operations.every(
+            (operation) => operation.kind === "select",
+          ),
+        );
       },
     );
   });

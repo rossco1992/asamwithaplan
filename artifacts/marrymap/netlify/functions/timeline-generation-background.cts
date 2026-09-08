@@ -2,6 +2,7 @@ import {
   runTimelineGeneration,
   TimelineGenerationJobSchema,
 } from "../../../api-server/src/services/timelineGeneration";
+import { logger } from "../../../api-server/src/lib/logger";
 
 type BackgroundEvent = {
   body: string | null;
@@ -16,34 +17,58 @@ export const handler: BackgroundHandler = async (event) => {
     event.headers.authorization ?? event.headers.Authorization;
 
   if (!expectedSecret || suppliedSecret !== `Bearer ${expectedSecret}`) {
-    console.error("[timelines] rejected unauthorized background invocation");
+    logger.warn(
+      { event: "timeline_generation_background_rejected" },
+      "Rejected unauthorized timeline background invocation",
+    );
     return;
   }
 
   if (!event.body) {
-    console.error("[timelines] background invocation did not include a body");
+    logger.warn(
+      { event: "timeline_generation_background_invalid", reason: "no_body" },
+      "Timeline background invocation did not include a body",
+    );
     return;
   }
 
   let payload: unknown;
   try {
     payload = JSON.parse(event.body);
-  } catch (error) {
-    console.error(
-      "[timelines] background invocation contained invalid JSON",
-      error,
+  } catch {
+    logger.warn(
+      {
+        event: "timeline_generation_background_invalid",
+        reason: "invalid_json",
+      },
+      "Timeline background invocation contained invalid JSON",
     );
     return;
   }
 
   const parsed = TimelineGenerationJobSchema.safeParse(payload);
   if (!parsed.success) {
-    console.error(
-      "[timelines] background invocation contained an invalid job",
-      parsed.error.flatten(),
+    logger.warn(
+      {
+        event: "timeline_generation_background_invalid",
+        reason: "invalid_job",
+        issueCount: parsed.error.issues.length,
+      },
+      "Timeline background invocation contained an invalid job",
     );
     return;
   }
 
+  logger.info(
+    {
+      event: "timeline_generation_background_received",
+      workflow: "timeline_generation",
+      weddingId: parsed.data.weddingId,
+      runId: parsed.data.runId,
+      requestId: parsed.data.requestId,
+      attempt: parsed.data.attempt,
+    },
+    "Timeline background invocation received",
+  );
   await runTimelineGeneration(parsed.data);
 };

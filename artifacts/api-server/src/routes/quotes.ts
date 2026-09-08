@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db, quotesTable, vendorCategories } from "@workspace/db";
-import type { QuoteLineItem, Wedding } from "@workspace/db";
+import type { Quote, QuoteLineItem, Wedding } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { eq, and } from "drizzle-orm";
 import { requireAuth } from "../middlewares/requireAuth";
@@ -19,6 +19,15 @@ import multer from "multer";
 // that tries to read a local test file when `module.parent` is falsy (always true
 // in a bundled ESM entry point).
 import pdfParse from "pdf-parse/lib/pdf-parse.js";
+import { logger } from "../lib/logger";
+import {
+  createAiRunId,
+  getRequestId,
+  getSafeErrorDiagnostics,
+  GPT_5_NANO_MODEL,
+  observeAiWorkflow,
+  type AiProviderUsage,
+} from "../services/aiTelemetry";
 
 const router: IRouter = Router();
 
@@ -88,13 +97,32 @@ Rules:
 - Do not include taxes/gratuity as separate line items unless explicitly broken out.
 - No prose, no markdown, only JSON.`;
 
-async function parseQuoteWithAI(rawText: string): Promise<{
+const ParsedQuoteSchema = z.object({
+  currency: z.string().trim().min(3).max(8).default("USD"),
+  lineItems: z
+    .array(
+      z.object({
+        item: z.string().trim().min(1).max(500),
+        quantity: z.coerce.number().finite().positive(),
+        unitPrice: z.coerce.number().finite(),
+        total: z.coerce.number().finite(),
+      }),
+    )
+    .min(1)
+    .max(200),
+  totalAmount: z.coerce.number().finite().optional(),
+});
+
+async function parseQuoteWithAI(
+  rawText: string,
+  captureUsage: (usage: AiProviderUsage | null | undefined) => void,
+): Promise<{
   currency: string;
   lineItems: QuoteLineItem[];
   totalAmount: number;
 }> {
   const completion = await openai.chat.completions.create({
-    model: "gpt-5-nano",
+    model: GPT_5_NANO_MODEL,
     response_format: { type: "json_object" },
     max_completion_tokens: 2048,
     messages: [
@@ -102,15 +130,12 @@ async function parseQuoteWithAI(rawText: string): Promise<{
       { role: "user", content: `Parse this vendor quote:\n\n${rawText}` },
     ],
   });
+  captureUsage(completion.usage);
 
   const raw = completion.choices[0]?.message?.content ?? "{}";
-  const parsed = JSON.parse(raw) as {
-    currency?: string;
-    lineItems?: QuoteLineItem[];
-    totalAmount?: number;
-  };
+  const parsed = ParsedQuoteSchema.parse(JSON.parse(raw));
 
-  const lineItems: QuoteLineItem[] = (parsed.lineItems ?? []).map((li) => ({
+  const lineItems: QuoteLineItem[] = parsed.lineItems.map((li) => ({
     item: String(li.item ?? ""),
     quantity: Number(li.quantity ?? 1),
     unitPrice: Number(li.unitPrice ?? 0),
@@ -118,11 +143,10 @@ async function parseQuoteWithAI(rawText: string): Promise<{
   }));
 
   const totalAmount =
-    Number(parsed.totalAmount) ||
-    lineItems.reduce((sum, li) => sum + li.total, 0);
+    parsed.totalAmount ?? lineItems.reduce((sum, li) => sum + li.total, 0);
 
   return {
-    currency: parsed.currency ?? "USD",
+    currency: parsed.currency.toUpperCase(),
     lineItems,
     totalAmount,
   };
@@ -153,8 +177,9 @@ router.post(
   // Accept optional PDF upload; field name = "pdf"
   uploadSingle("pdf"),
   requireWeddingFromBody,
-  async (req, res) => {
+  async (req, res, next) => {
     const wedding = getAuthorizedResource<Wedding>(req);
+    const requestId = getRequestId(req);
 
     const bodyResult = CreateQuoteBody.safeParse(req.body);
     if (!bodyResult.success) {
@@ -174,7 +199,15 @@ router.post(
           return;
         }
       } catch (err) {
-        console.error("[quotes] PDF extraction failed", err);
+        logger.warn(
+          {
+            event: "quote_pdf_extraction_failed",
+            weddingId: wedding.id,
+            requestId,
+            ...getSafeErrorDiagnostics(err),
+          },
+          "Could not extract text from quote PDF",
+        );
         res.status(422).json({ error: "Failed to read PDF. Make sure it is a text-based PDF, not a scanned image." });
         return;
       }
@@ -185,27 +218,46 @@ router.post(
       return;
     }
 
-    let parsed: Awaited<ReturnType<typeof parseQuoteWithAI>>;
+    let quote: Quote;
     try {
-      parsed = await parseQuoteWithAI(rawText);
+      quote = await observeAiWorkflow(
+        {
+          runId: createAiRunId(),
+          requestId,
+          weddingId: wedding.id,
+          workflow: "quote_parsing",
+          model: GPT_5_NANO_MODEL,
+          attempt: 1,
+        },
+        async ({ captureUsage }) => {
+          const parsed = await parseQuoteWithAI(rawText, captureUsage);
+          const [savedQuote] = await db
+            .insert(quotesTable)
+            .values({
+              weddingId: wedding.id,
+              vendorName,
+              category,
+              rawText,
+              lineItems: parsed.lineItems,
+              totalAmount: parsed.totalAmount,
+              currency: parsed.currency,
+            })
+            .returning();
+
+          if (!savedQuote) {
+            throw new Error("Quote insert returned no record");
+          }
+          return savedQuote;
+        },
+      );
     } catch (err) {
-      console.error("[quotes] AI parsing failed", err);
+      if (getSafeErrorDiagnostics(err).errorCategory === "application") {
+        next(err);
+        return;
+      }
       res.status(502).json({ error: "Failed to parse quote. Please try again." });
       return;
     }
-
-    const [quote] = await db
-      .insert(quotesTable)
-      .values({
-        weddingId: wedding.id,
-        vendorName,
-        category,
-        rawText,
-        lineItems: parsed.lineItems,
-        totalAmount: parsed.totalAmount,
-        currency: parsed.currency,
-      })
-      .returning();
 
     res.status(201).json({ quote });
   },
