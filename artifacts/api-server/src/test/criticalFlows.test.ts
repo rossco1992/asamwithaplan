@@ -11,6 +11,8 @@ const dbModule = await import("@workspace/db");
 const {
   aiWorkflowRunsTable,
   db,
+  milestonesTable,
+  milestoneTasksTable,
   quotesTable,
   timelinesTable,
   usersTable,
@@ -18,6 +20,7 @@ const {
 } = dbModule;
 const { openai } = await import("@workspace/integrations-openai-ai-server");
 const { default: apiRouter } = await import("../routes/index");
+const { MILESTONE_TEMPLATES } = await import("../lib/milestoneTemplates");
 const { dispatchTimelineGeneration } =
   await import("../services/timelineGeneration");
 const { default: serverless } =
@@ -57,6 +60,7 @@ interface AwaitableBuilder extends PromiseLike<unknown> {
   limit: (value: number) => AwaitableBuilder;
   values: (value: unknown) => AwaitableBuilder;
   set: (value: unknown) => AwaitableBuilder;
+  onConflictDoNothing: () => AwaitableBuilder;
   returning: () => Promise<unknown>;
   catch: (onRejected: (reason: unknown) => unknown) => Promise<unknown>;
   finally: (onFinally: () => void) => Promise<unknown>;
@@ -94,6 +98,9 @@ function createBuilder(
     },
     set(value: unknown) {
       operation.values = value;
+      return builder;
+    },
+    onConflictDoNothing() {
       return builder;
     },
     returning() {
@@ -895,6 +902,409 @@ describe("critical MVP API flows", { concurrency: false }, () => {
           ),
         );
         assert.equal(ai.calls.length, 0);
+      },
+    );
+  });
+});
+
+// ── Journey map milestones ────────────────────────────────────────────────────
+
+function templateMilestoneRow(id: number, templateIndex: number) {
+  const template = MILESTONE_TEMPLATES[templateIndex]!;
+  return {
+    id,
+    weddingId: readyWedding.id,
+    templateKey: template.key,
+    title: template.title,
+    notes: null,
+    schedule: "relative" as const,
+    offsetWeeks: template.offsetWeeks,
+    fixedDate: null,
+    status: "todo" as const,
+    isCustom: false,
+    completedAt: null,
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
+function taskRow(id: number, milestoneId: number, title: string, done = false) {
+  return {
+    id,
+    milestoneId,
+    title,
+    position: 0,
+    doneAt: done ? createdAt : null,
+    doneByUserId: done ? user.id : null,
+    createdAt,
+  };
+}
+
+interface JourneyBody {
+  today: string;
+  weddingDate: string | null;
+  daysToGo: number | null;
+  progress: { done: number; total: number; percent: number };
+  currentMilestoneId: number | null;
+  nodes: Array<{
+    id: number;
+    templateKey: string | null;
+    title: string;
+    dueDate: string | null;
+    phase: string;
+    status: string;
+    state: string;
+    isCustom: boolean;
+    tasks: Array<{ id: number; title: string; done: boolean }>;
+  }>;
+  phases: Array<{ key: string; label: string; milestoneIds: number[] }>;
+}
+
+const authorizedWeddingRow = [{ wedding: readyWedding }];
+
+describe("journey map milestones", { concurrency: false }, () => {
+  test("requires a signed-in user", async () => {
+    await withHarness({}, [], async ({ db: dbHarness }) => {
+      const response = await apiRequest(`/weddings/${readyWedding.id}/milestones`, {
+        userId: null,
+      });
+      assert.equal(response.status, 401);
+      assert.equal(dbHarness.operations.length, 0);
+    });
+  });
+
+  test("seeds the starter journey the first time the map opens", async () => {
+    const seeded = MILESTONE_TEMPLATES.map((_, index) =>
+      templateMilestoneRow(100 + index, index),
+    );
+    const seededTasks = MILESTONE_TEMPLATES.flatMap((template, index) =>
+      template.tasks.map((title, position) => ({
+        ...taskRow(1000 + index * 10 + position, 100 + index, title),
+        position,
+      })),
+    );
+
+    await withHarness(
+      {
+        selects: [authorizedWeddingRow, []],
+        inserts: [seeded, seededTasks],
+      },
+      [],
+      async ({ db: dbHarness }) => {
+        // A "today" far from the server's date is ignored.
+        const response = await apiRequest(
+          `/weddings/${readyWedding.id}/milestones?today=2001-01-01`,
+        );
+        assert.equal(response.status, 200);
+        const journey = response.body as JourneyBody;
+
+        assert.equal(journey.today, new Date().toISOString().slice(0, 10));
+        assert.equal(journey.weddingDate, "2027-06-12");
+        assert.equal(journey.nodes.length, MILESTONE_TEMPLATES.length);
+        assert.equal(journey.nodes[0]!.templateKey, "set-budget");
+        assert.equal(journey.nodes.at(-1)!.templateKey, "day-of-timeline");
+        assert.equal(
+          journey.nodes.find((node) => node.templateKey === "book-venue")!.dueDate,
+          "2026-06-27",
+        );
+        assert.equal(journey.currentMilestoneId, 100);
+        assert.deepEqual(journey.progress, {
+          done: 0,
+          total: MILESTONE_TEMPLATES.length,
+          percent: 0,
+        });
+        assert.equal(journey.nodes[0]!.tasks.length, 3);
+
+        const inserts = dbHarness.operations.filter(
+          (operation) => operation.kind === "insert",
+        );
+        assert.equal(inserts.length, 2);
+        assert.equal(inserts[0]!.table, milestonesTable);
+        const milestoneValues = inserts[0]!.values as Array<{
+          weddingId: number;
+          templateKey: string;
+        }>;
+        assert.equal(milestoneValues.length, MILESTONE_TEMPLATES.length);
+        assert.ok(
+          milestoneValues.every((value) => value.weddingId === readyWedding.id),
+        );
+        assert.equal(inserts[1]!.table, milestoneTasksTable);
+      },
+    );
+  });
+
+  test("reads an existing journey without seeding again", async () => {
+    const venue = { ...templateMilestoneRow(101, 2), status: "done" as const };
+    const photographer = templateMilestoneRow(102, 3);
+
+    await withHarness(
+      {
+        selects: [
+          authorizedWeddingRow,
+          [photographer, venue],
+          [taskRow(500, 102, "Compare portfolios", true)],
+        ],
+      },
+      [],
+      async ({ db: dbHarness }) => {
+        const response = await apiRequest(`/weddings/${readyWedding.id}/milestones`);
+        assert.equal(response.status, 200);
+        const journey = response.body as JourneyBody;
+
+        assert.deepEqual(
+          journey.nodes.map((node) => node.id),
+          [101, 102],
+        );
+        assert.equal(journey.nodes[0]!.state, "done");
+        assert.equal(journey.currentMilestoneId, 102);
+        assert.deepEqual(journey.nodes[1]!.tasks, [
+          { id: 500, title: "Compare portfolios", done: true },
+        ]);
+        assert.deepEqual(journey.progress, { done: 1, total: 2, percent: 50 });
+        assert.ok(
+          dbHarness.operations.every((operation) => operation.kind === "select"),
+        );
+      },
+    );
+  });
+
+  test("adds a custom milestone pinned to a date", async () => {
+    const custom = {
+      ...templateMilestoneRow(150, 0),
+      templateKey: null,
+      title: "Engagement party",
+      schedule: "fixed" as const,
+      offsetWeeks: null,
+      fixedDate: "2027-01-09",
+      isCustom: true,
+    };
+
+    await withHarness(
+      {
+        selects: [authorizedWeddingRow, [{ value: 0 }], [custom], []],
+        inserts: [[custom], []],
+      },
+      [],
+      async ({ db: dbHarness }) => {
+        const response = await apiRequest(`/weddings/${readyWedding.id}/milestones`, {
+          method: "POST",
+          body: {
+            title: "  Engagement party ",
+            when: { kind: "date", date: "2027-01-09" },
+            tasks: ["Send invites"],
+          },
+        });
+        assert.equal(response.status, 201);
+        const body = response.body as { milestoneId: number; journey: JourneyBody };
+        assert.equal(body.milestoneId, 150);
+        assert.equal(body.journey.nodes[0]!.phase, "three-to-six");
+        assert.equal(body.journey.nodes[0]!.isCustom, true);
+
+        const [milestoneInsert, taskInsert] = dbHarness.operations.filter(
+          (operation) => operation.kind === "insert",
+        );
+        assert.deepEqual(milestoneInsert!.values, {
+          weddingId: readyWedding.id,
+          title: "Engagement party",
+          notes: null,
+          isCustom: true,
+          schedule: "fixed",
+          fixedDate: "2027-01-09",
+          offsetWeeks: null,
+        });
+        assert.deepEqual(taskInsert!.values, [
+          { milestoneId: 150, title: "Send invites", position: 0 },
+        ]);
+      },
+    );
+  });
+
+  test("adds a custom milestone to a phase so it moves with the date", async () => {
+    await withHarness(
+      {
+        selects: [authorizedWeddingRow, [{ value: 2 }], [], []],
+        inserts: [[{ ...templateMilestoneRow(151, 0), isCustom: true }]],
+      },
+      [],
+      async ({ db: dbHarness }) => {
+        const response = await apiRequest(`/weddings/${readyWedding.id}/milestones`, {
+          method: "POST",
+          body: { title: "Dance lessons", when: { kind: "phase", phase: "one-to-three" } },
+        });
+        assert.equal(response.status, 201);
+        const insert = dbHarness.operations.find(
+          (operation) => operation.kind === "insert",
+        );
+        assert.equal((insert!.values as { schedule: string }).schedule, "relative");
+        assert.equal((insert!.values as { offsetWeeks: number }).offsetWeeks, 8);
+      },
+    );
+  });
+
+  test("rejects impossible dates, unknown fields and the custom milestone cap", async () => {
+    await withHarness(
+      { selects: [authorizedWeddingRow, authorizedWeddingRow, authorizedWeddingRow, [{ value: 100 }]] },
+      [],
+      async ({ db: dbHarness }) => {
+        const badDate = await apiRequest(`/weddings/${readyWedding.id}/milestones`, {
+          method: "POST",
+          body: { title: "Cake tasting", when: { kind: "date", date: "2027-02-30" } },
+        });
+        assert.equal(badDate.status, 400);
+
+        const extraField = await apiRequest(`/weddings/${readyWedding.id}/milestones`, {
+          method: "POST",
+          body: {
+            title: "Cake tasting",
+            when: { kind: "phase", phase: "three-to-six" },
+            weddingId: 999,
+          },
+        });
+        assert.equal(extraField.status, 400);
+
+        const capped = await apiRequest(`/weddings/${readyWedding.id}/milestones`, {
+          method: "POST",
+          body: { title: "Cake tasting", when: { kind: "phase", phase: "three-to-six" } },
+        });
+        assert.equal(capped.status, 409);
+
+        assert.ok(
+          dbHarness.operations.every((operation) => operation.kind === "select"),
+        );
+      },
+    );
+  });
+
+  test("marks a milestone done and records when", async () => {
+    const venue = templateMilestoneRow(101, 2);
+    await withHarness(
+      {
+        selects: [
+          authorizedWeddingRow,
+          [venue],
+          [{ ...venue, status: "done" as const }],
+          [],
+        ],
+      },
+      [],
+      async ({ db: dbHarness }) => {
+        const response = await apiRequest(
+          `/weddings/${readyWedding.id}/milestones/101`,
+          { method: "PATCH", body: { status: "done" } },
+        );
+        assert.equal(response.status, 200);
+        const update = dbHarness.operations.find(
+          (operation) => operation.kind === "update",
+        );
+        assert.equal(update!.table, milestonesTable);
+        const values = update!.values as { status: string; completedAt: unknown };
+        assert.equal(values.status, "done");
+        assert.ok(values.completedAt instanceof Date);
+        const journey = (response.body as { journey: JourneyBody }).journey;
+        assert.equal(journey.nodes[0]!.state, "done");
+      },
+    );
+  });
+
+  test("skips starter milestones instead of deleting them", async () => {
+    await withHarness(
+      { selects: [authorizedWeddingRow, [templateMilestoneRow(101, 2)]] },
+      [],
+      async ({ db: dbHarness }) => {
+        const response = await apiRequest(
+          `/weddings/${readyWedding.id}/milestones/101`,
+          { method: "DELETE" },
+        );
+        assert.equal(response.status, 409);
+        assert.ok(
+          dbHarness.operations.every((operation) => operation.kind === "select"),
+        );
+      },
+    );
+  });
+
+  test("checks off a task and records who did it", async () => {
+    const venue = templateMilestoneRow(101, 2);
+    await withHarness(
+      {
+        selects: [
+          authorizedWeddingRow,
+          [venue],
+          [taskRow(500, 101, "Tour your favorites")],
+          [user],
+          [venue],
+          [taskRow(500, 101, "Tour your favorites", true)],
+        ],
+      },
+      [],
+      async ({ db: dbHarness }) => {
+        const response = await apiRequest(
+          `/weddings/${readyWedding.id}/milestones/101/tasks/500`,
+          { method: "PATCH", body: { done: true } },
+        );
+        assert.equal(response.status, 200);
+        const update = dbHarness.operations.find(
+          (operation) => operation.kind === "update",
+        );
+        assert.equal(update!.table, milestoneTasksTable);
+        const values = update!.values as { doneAt: unknown; doneByUserId: number };
+        assert.ok(values.doneAt instanceof Date);
+        assert.equal(values.doneByUserId, user.id);
+      },
+    );
+  });
+
+  test("hides other couples' weddings, milestones and tasks", async () => {
+    await withHarness(
+      { selects: [[], authorizedWeddingRow, [], authorizedWeddingRow, [templateMilestoneRow(101, 2)], []] },
+      [],
+      async ({ db: dbHarness }) => {
+        const foreignWedding = await apiRequest("/weddings/999/milestones");
+        assert.equal(foreignWedding.status, 404);
+        assert.deepEqual(foreignWedding.body, { error: "Wedding not found" });
+
+        const foreignMilestone = await apiRequest(
+          `/weddings/${readyWedding.id}/milestones/999`,
+          { method: "PATCH", body: { status: "done" } },
+        );
+        assert.equal(foreignMilestone.status, 404);
+        assert.deepEqual(foreignMilestone.body, { error: "Milestone not found" });
+
+        const foreignTask = await apiRequest(
+          `/weddings/${readyWedding.id}/milestones/101/tasks/999`,
+          { method: "DELETE" },
+        );
+        assert.equal(foreignTask.status, 404);
+        assert.deepEqual(foreignTask.body, { error: "Task not found" });
+
+        assert.ok(
+          dbHarness.operations.every((operation) => operation.kind === "select"),
+        );
+      },
+    );
+  });
+
+  test("previews a date change without writing anything", async () => {
+    await withHarness(
+      {
+        selects: [authorizedWeddingRow, [templateMilestoneRow(101, 2)], []],
+      },
+      [],
+      async ({ db: dbHarness }) => {
+        const response = await apiRequest(
+          `/weddings/${readyWedding.id}/milestones/date-preview`,
+          { method: "POST", body: { weddingDate: "2027-09-18" } },
+        );
+        assert.equal(response.status, 200);
+        const preview = response.body as {
+          moved: Array<{ id: number; from: string; to: string }>;
+        };
+        assert.deepEqual(preview.moved, [
+          { id: 101, title: "Book the venue", from: "2026-06-27", to: "2026-10-03" },
+        ]);
+        assert.ok(
+          dbHarness.operations.every((operation) => operation.kind === "select"),
+        );
       },
     );
   });
