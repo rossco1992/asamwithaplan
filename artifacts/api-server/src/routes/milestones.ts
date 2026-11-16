@@ -178,42 +178,48 @@ async function loadMilestoneInputs(weddingId: number): Promise<MilestoneInput[]>
 
 /**
  * Gives a wedding its starter journey the first time the map is opened.
+ * Milestones and their tasks are written in one transaction, so a failure
+ * part way leaves nothing behind and the next open simply seeds again.
  * The unique (wedding, template key) index makes a concurrent second seed a
  * no-op, in which case we read back whatever the first one wrote.
  */
 async function seedTemplates(weddingId: number): Promise<MilestoneInput[]> {
-  const inserted = await db
-    .insert(milestonesTable)
-    .values(
-      MILESTONE_TEMPLATES.map((template) => ({
-        weddingId,
-        templateKey: template.key,
-        title: template.title,
-        schedule: "relative" as const,
-        offsetWeeks: template.offsetWeeks,
-      })),
-    )
-    .onConflictDoNothing()
-    .returning();
+  const seeded = await db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(milestonesTable)
+      .values(
+        MILESTONE_TEMPLATES.map((template) => ({
+          weddingId,
+          templateKey: template.key,
+          title: template.title,
+          schedule: "relative" as const,
+          offsetWeeks: template.offsetWeeks,
+        })),
+      )
+      .onConflictDoNothing()
+      .returning();
 
-  if (inserted.length === 0) return loadMilestoneInputs(weddingId);
+    if (inserted.length === 0) return null;
 
-  const taskValues = inserted.flatMap((milestone) => {
-    const template = MILESTONE_TEMPLATES.find(
-      (candidate) => candidate.key === milestone.templateKey,
-    );
-    return (template?.tasks ?? []).map((title, position) => ({
-      milestoneId: milestone.id,
-      title,
-      position,
-    }));
+    const taskValues = inserted.flatMap((milestone) => {
+      const template = MILESTONE_TEMPLATES.find(
+        (candidate) => candidate.key === milestone.templateKey,
+      );
+      return (template?.tasks ?? []).map((title, position) => ({
+        milestoneId: milestone.id,
+        title,
+        position,
+      }));
+    });
+    const tasks =
+      taskValues.length > 0
+        ? await tx.insert(milestoneTasksTable).values(taskValues).returning()
+        : [];
+
+    return inserted.map((milestone) => toMilestoneInput(milestone, tasks));
   });
-  const tasks =
-    taskValues.length > 0
-      ? await db.insert(milestoneTasksTable).values(taskValues).returning()
-      : [];
 
-  return inserted.map((milestone) => toMilestoneInput(milestone, tasks));
+  return seeded ?? loadMilestoneInputs(weddingId);
 }
 
 async function loadJourney(wedding: Wedding, today: string): Promise<Journey> {

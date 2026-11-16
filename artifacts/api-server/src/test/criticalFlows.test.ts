@@ -26,7 +26,7 @@ const { dispatchTimelineGeneration } =
 const { default: serverless } =
   await import("../../../../lib/serverless-http/serverless-http.js");
 
-type OperationKind = "select" | "insert" | "update" | "delete";
+type OperationKind = "select" | "insert" | "update" | "delete" | "transaction";
 
 interface FakeDbOperation {
   kind: OperationKind;
@@ -143,6 +143,7 @@ function installFakeDb(plan: FakeDbPlan = {}): FakeDbHarness {
     insert: mutableDb.insert,
     update: mutableDb.update,
     delete: mutableDb.delete,
+    transaction: mutableDb.transaction,
   };
 
   const nextResult = (kind: keyof typeof results, required: boolean) => {
@@ -181,6 +182,13 @@ function installFakeDb(plan: FakeDbPlan = {}): FakeDbHarness {
     const operation: FakeDbOperation = { kind: "delete", table, joins: [] };
     operations.push(operation);
     return createBuilder(operation, nextResult("deletes", false));
+  };
+
+  // Run the callback against the same fake, recording that it was a transaction.
+  mutableDb.transaction = async (...args: unknown[]) => {
+    const run = args[0] as (tx: unknown) => Promise<unknown>;
+    operations.push({ kind: "transaction" as OperationKind, joins: [] });
+    return run(db);
   };
 
   return {
@@ -1015,6 +1023,9 @@ describe("journey map milestones", { concurrency: false }, () => {
         });
         assert.equal(journey.nodes[0]!.tasks.length, 3);
 
+        // Milestones and tasks are written together or not at all.
+        const kinds = dbHarness.operations.map((operation) => operation.kind);
+        assert.deepEqual(kinds.slice(-3), ["transaction", "insert", "insert"]);
         const inserts = dbHarness.operations.filter(
           (operation) => operation.kind === "insert",
         );
