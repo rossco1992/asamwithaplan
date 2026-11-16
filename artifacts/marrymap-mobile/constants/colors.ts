@@ -33,6 +33,13 @@ const colors = {
     accent: '#c28070',
     accentForeground: '#ffffff',
 
+    // Warning — overdue milestones (amber, not alarm red)
+    warning: '#b7791f',
+    warningSoft: '#fbefd9',
+
+    // Success — finished milestones
+    success: '#3f7d5c',
+
     // Destructive
     destructive: '#dc2626',
     destructiveForeground: '#ffffff',
