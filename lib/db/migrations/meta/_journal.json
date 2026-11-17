@@ -22,6 +22,13 @@
       "when": 1788871877214,
       "tag": "0002_soft_vector",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794867757838,
+      "tag": "0003_journey_milestones",
+      "breakpoints": true
     }
   ]
 }

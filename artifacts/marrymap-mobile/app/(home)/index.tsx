@@ -15,7 +15,8 @@ import { fonts } from '@/constants/colors';
 import { useApi } from '@/hooks/useApi';
 import { OnboardingForm } from '@/components/OnboardingForm';
 import { GeneratingState } from '@/components/GeneratingState';
-import { TimelineView } from '@/components/TimelineView';
+import { JourneyScreen } from '@/components/journey/JourneyScreen';
+import { initialsFor } from '@/lib/journey';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -129,7 +130,11 @@ export default function HomeScreen() {
       {state.kind === 'form' && <OnboardingForm onSubmit={handleFormSubmit} />}
       {state.kind === 'generating' && <GeneratingState />}
       {state.kind === 'ready' && (
-        <TimelineView timeline={state.timeline} wedding={state.wedding} />
+        <JourneyScreen
+          wedding={state.wedding}
+          timeline={state.timeline}
+          initials={initialsFor(user?.fullName ?? displayName)}
+        />
       )}
     </View>
   );
