@@ -15,7 +15,7 @@ type Priority = "urgent" | "this-week" | "upcoming";
 interface TimelineTask { title: string; priority: Priority; }
 interface TimelineWeek { weekLabel: string; phase: string; tasks: TimelineTask[]; }
 interface TimelineData { id: number; weddingId: number; generatedAt: string; tasks: TimelineWeek[]; }
-interface WeddingData { id: number; weddingDate: string; city: string; guestCount: number; style: string; }
+interface WeddingData { id: number; weddingDate: string | null; city: string; guestCount: number; style: string; }
 
 type DashboardState =
   | { kind: "loading" }
@@ -598,7 +598,7 @@ export function Dashboard() {
                   Your plan
                 </p>
                 <h1 className="text-4xl font-serif text-primary">
-                  {state.wedding.city} · {new Date(state.wedding.weddingDate + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}
+                  {state.wedding.city} · {state.wedding.weddingDate ? new Date(state.wedding.weddingDate + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : "Date to be decided"}
                 </h1>
                 <p className="text-muted-foreground mt-2 mb-8">
                   {state.timeline.tasks.length} weeks · {state.wedding.guestCount} guests · {state.wedding.style}

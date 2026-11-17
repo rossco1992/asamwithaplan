@@ -10,6 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
 import { fonts } from '@/constants/colors';
 import type { TimelineData, TimelineTask, TimelineWeek, WeddingData } from '@/app/(home)/index';
+import { formatLongDate } from '@/lib/journey';
 
 type Priority = 'urgent' | 'this-week' | 'upcoming';
 
@@ -110,11 +111,8 @@ export function TimelineView({ timeline, wedding }: Props) {
   const s = useMemo(() => makeStyles(colors, insets), [colors, insets]);
 
   const weddingDateFormatted = useMemo(() => {
-    try {
-      return new Date(wedding.weddingDate + 'T12:00:00').toLocaleDateString('en-GB', {
-        day: 'numeric', month: 'long', year: 'numeric',
-      });
-    } catch { return wedding.weddingDate; }
+    if (!wedding.weddingDate) return 'Date to be decided';
+    return formatLongDate(wedding.weddingDate);
   }, [wedding.weddingDate]);
 
   const ListHeader = (

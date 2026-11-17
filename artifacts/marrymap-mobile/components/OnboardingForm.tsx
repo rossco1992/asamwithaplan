@@ -14,6 +14,8 @@ import { useColors } from '@/hooks/useColors';
 import { fonts } from '@/constants/colors';
 import { useApi } from '@/hooks/useApi';
 import * as Haptics from 'expo-haptics';
+import { CalendarPicker } from '@/components/journey/CalendarPicker';
+import { formatLongDate, localToday } from '@/lib/journey';
 
 type WeddingStyle = 'intimate' | 'standard' | 'large';
 
@@ -25,21 +27,27 @@ const styleOptions: { value: WeddingStyle; label: string; desc: string }[] = [
 
 interface Props {
   onSubmit: (weddingId: number) => void;
+  /** The other partner already started a plan and shared a code. */
+  onJoin: () => void;
 }
 
-export function OnboardingForm({ onSubmit }: Props) {
+type DateMode = 'date' | 'undecided';
+
+export function OnboardingForm({ onSubmit, onJoin }: Props) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { apiFetch } = useApi();
 
-  const [weddingDate, setWeddingDate] = useState('');
+  const [dateMode, setDateMode] = useState<DateMode>('date');
+  const [weddingDate, setWeddingDate] = useState<string | null>(null);
   const [city, setCity] = useState('');
   const [guestCount, setGuestCount] = useState('');
   const [style, setStyle] = useState<WeddingStyle>('standard');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const canSubmit = !!weddingDate && !!city && !!guestCount && !loading;
+  const hasDate = dateMode === 'undecided' || !!weddingDate;
+  const canSubmit = hasDate && !!city && !!guestCount && !loading;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -50,7 +58,7 @@ export function OnboardingForm({ onSubmit }: Props) {
       const result = await apiFetch<{ weddingId: number; status: string }>('/timelines/generate', {
         method: 'POST',
         body: JSON.stringify({
-          weddingDate,
+          weddingDate: dateMode === 'date' ? weddingDate : null,
           city,
           guestCount: parseInt(guestCount, 10),
           style,
@@ -82,16 +90,40 @@ export function OnboardingForm({ onSubmit }: Props) {
 
       {/* Wedding date */}
       <Text style={s.label}>Wedding date</Text>
-      <TextInput
-        style={s.input}
-        value={weddingDate}
-        onChangeText={setWeddingDate}
-        placeholder="YYYY-MM-DD  e.g. 2026-09-12"
-        placeholderTextColor={colors.mutedForeground}
-        keyboardType="numbers-and-punctuation"
-        autoCapitalize="none"
-        testID="date-input"
-      />
+      <View style={s.segmented} accessibilityRole="tablist">
+        {(['date', 'undecided'] as DateMode[]).map((option) => {
+          const selected = option === dateMode;
+          return (
+            <Pressable
+              key={option}
+              onPress={() => { Haptics.selectionAsync(); setDateMode(option); }}
+              accessibilityRole="tab"
+              accessibilityState={{ selected }}
+              style={[s.segment, selected && s.segmentSelected]}
+              testID={`date-mode-${option}`}
+            >
+              <Text style={[s.segmentText, selected && s.segmentTextSelected]}>
+                {option === 'date' ? 'We have a date' : 'Not decided yet'}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      {dateMode === 'date' ? (
+        <View style={s.dateBlock}>
+          <Text style={s.dateChosen}>{weddingDate ? formatLongDate(weddingDate) : 'Tap your day'}</Text>
+          <CalendarPicker
+            value={weddingDate}
+            initialMonth={localToday()}
+            weddingDate={null}
+            onChange={setWeddingDate}
+          />
+        </View>
+      ) : (
+        <Text style={s.dateHelp}>
+          No problem. Sam plans by stage for now, and you can set the date any time.
+        </Text>
+      )}
 
       {/* City */}
       <Text style={s.label}>City or region</Text>
@@ -99,7 +131,7 @@ export function OnboardingForm({ onSubmit }: Props) {
         style={s.input}
         value={city}
         onChangeText={setCity}
-        placeholder="e.g. London, UK"
+        placeholder="e.g. Austin, TX"
         placeholderTextColor={colors.mutedForeground}
         autoCapitalize="words"
         testID="city-input"
@@ -159,6 +191,15 @@ export function OnboardingForm({ onSubmit }: Props) {
           : <Text style={s.submitBtnText}>Build my timeline →</Text>
         }
       </Pressable>
+
+      <Pressable
+        onPress={() => { Haptics.selectionAsync(); onJoin(); }}
+        accessibilityRole="button"
+        style={({ pressed }) => [s.joinLink, pressed && s.buttonPressed]}
+        testID="join-partner"
+      >
+        <Text style={s.joinLinkText}>Did your partner already start? Join their plan</Text>
+      </Pressable>
     </ScrollView>
   );
 }
@@ -213,6 +254,28 @@ function makeStyles(colors: ReturnType<typeof useColors>, insets: ReturnType<typ
       backgroundColor: colors.card,
       marginBottom: 20,
     },
+    segmented: {
+      flexDirection: 'row',
+      backgroundColor: colors.secondary,
+      borderRadius: 10,
+      padding: 3,
+      marginBottom: 14,
+    },
+    segment: { flex: 1, paddingVertical: 9, borderRadius: 8, alignItems: 'center' },
+    segmentSelected: { backgroundColor: colors.card },
+    segmentText: { fontFamily: fonts.sansMedium, fontSize: 14, color: colors.mutedForeground },
+    segmentTextSelected: { color: colors.primary },
+    dateBlock: { marginBottom: 20, gap: 10 },
+    dateChosen: { fontFamily: fonts.serifBold, fontSize: 18, color: colors.primary },
+    dateHelp: {
+      fontFamily: fonts.sans,
+      fontSize: 14,
+      lineHeight: 20,
+      color: colors.mutedForeground,
+      marginBottom: 20,
+    },
+    joinLink: { alignItems: 'center', paddingVertical: 18 },
+    joinLinkText: { fontFamily: fonts.sansMedium, fontSize: 14, color: colors.accent },
     styleRow: { flexDirection: 'row', gap: 8, marginBottom: 24 },
     styleBtn: {
       flex: 1,

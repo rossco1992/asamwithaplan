@@ -1,12 +1,21 @@
 import { Router, type IRouter, type Response } from "express";
-import { db, weddingsTable, timelinesTable } from "@workspace/db";
+import {
+  db,
+  weddingsTable,
+  timelinesTable,
+  weddingMembersTable,
+} from "@workspace/db";
 import type { Wedding } from "@workspace/db";
-import { desc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { requireAuth } from "../middlewares/requireAuth";
 import {
   getAuthenticatedUser,
   getAuthorizedWedding,
+  getCurrentWeddingForUser,
+  getWeddingMembership,
+  type WeddingMembership,
 } from "../lib/authorization";
+import { isIsoDate } from "../lib/milestoneSchedule";
 import {
   getAuthorizedResource,
   requireResourceAccess,
@@ -26,9 +35,13 @@ const router: IRouter = Router();
 // ── Validation ────────────────────────────────────────────────────────────────
 
 const GenerateTimelineBody = z.object({
+  // Null or left out when the couple hasn't picked a date yet.
   weddingDate: z
     .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, "weddingDate must be YYYY-MM-DD"),
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "weddingDate must be YYYY-MM-DD")
+    .refine(isIsoDate, "weddingDate must be a real calendar date")
+    .nullable()
+    .optional(),
   city: z.string().min(1).max(100),
   guestCount: z.number().int().min(1).max(10000),
   style: z.enum(["intimate", "standard", "large"]),
@@ -37,6 +50,13 @@ const GenerateTimelineBody = z.object({
 const requireWeddingFromParams = requireResourceAccess<Wedding>({
   resolveId: (req) => req.params["weddingId"],
   lookup: getAuthorizedWedding,
+  invalidIdError: "Invalid weddingId",
+  notFoundError: "Wedding not found",
+});
+
+const requireMembershipFromParams = requireResourceAccess<WeddingMembership>({
+  resolveId: (req) => req.params["weddingId"],
+  lookup: getWeddingMembership,
   invalidIdError: "Invalid weddingId",
   notFoundError: "Wedding not found",
 });
@@ -91,7 +111,8 @@ router.post("/generate", requireAuth, async (req, res) => {
       .json({ error: "Invalid input", details: bodyResult.error.flatten() });
     return;
   }
-  const { weddingDate, city, guestCount, style } = bodyResult.data;
+  const { city, guestCount, style } = bodyResult.data;
+  const weddingDate = bodyResult.data.weddingDate ?? null;
 
   // Look up internal user
   const user = await getAuthenticatedUser(clerkUserId);
@@ -103,15 +124,9 @@ router.post("/generate", requireAuth, async (req, res) => {
   }
   const userId = user.id;
 
-  // One wedding per user — check for existing
-  const existingWeddings = await db
-    .select()
-    .from(weddingsTable)
-    .where(eq(weddingsTable.userId, userId))
-    .orderBy(desc(weddingsTable.createdAt), desc(weddingsTable.id))
-    .limit(1);
-  if (existingWeddings.length > 0) {
-    const existing = existingWeddings[0];
+  // One wedding per user, whether they started it or joined their partner's.
+  const existing = await getCurrentWeddingForUser(userId);
+  if (existing) {
     const status = existing.generationStatus;
 
     if (status === "ready") {
@@ -133,11 +148,18 @@ router.post("/generate", requireAuth, async (req, res) => {
     return;
   }
 
-  // Insert wedding record
-  const [wedding] = await db
-    .insert(weddingsTable)
-    .values({ userId, weddingDate, city, guestCount, style })
-    .returning();
+  // The wedding and its owner membership land together, so a plan is never
+  // left without anyone who can open it.
+  const wedding = await db.transaction(async (tx) => {
+    const [created] = await tx
+      .insert(weddingsTable)
+      .values({ userId, weddingDate, city, guestCount, style })
+      .returning();
+    await tx
+      .insert(weddingMembersTable)
+      .values({ weddingId: created.id, userId, role: "owner" });
+    return created;
+  });
 
   const generationJob: TimelineGenerationJob = {
     runId: createAiRunId(),
@@ -168,9 +190,9 @@ router.post("/generate", requireAuth, async (req, res) => {
 });
 
 // ── GET /api/timelines/current ───────────────────────────────────────────────
-// The MVP supports one current wedding per user. Resolve it from the authenticated
-// identity so browser-local state is never the source of truth. Ordering keeps the
-// behavior deterministic if legacy data contains more than one wedding row.
+// The MVP supports one current wedding per user: the one they started or the one
+// they joined with their partner's code. Resolve it from the authenticated identity
+// so device-local state is never the source of truth.
 
 router.get("/current", requireAuth, async (req, res) => {
   const clerkUserId = (req as any).clerkUserId as string;
@@ -181,19 +203,13 @@ router.get("/current", requireAuth, async (req, res) => {
     return;
   }
 
-  const weddings = await db
-    .select()
-    .from(weddingsTable)
-    .where(eq(weddingsTable.userId, user.id))
-    .orderBy(desc(weddingsTable.createdAt), desc(weddingsTable.id))
-    .limit(1);
-
-  if (weddings.length === 0) {
+  const wedding = await getCurrentWeddingForUser(user.id);
+  if (!wedding) {
     res.status(404).json({ error: "Wedding not found", code: "NO_WEDDING" });
     return;
   }
 
-  await sendTimelineState(res, weddings[0]);
+  await sendTimelineState(res, wedding);
 });
 
 // ── POST /api/timelines/:weddingId/retry ──────────────────────────────────────
@@ -270,13 +286,24 @@ router.post(
 // ── DELETE /api/timelines/:weddingId ──────────────────────────────────────────
 // Start over: removes the wedding + its timeline so the user can re-onboard.
 // This is the escape hatch when retries are exhausted (retryCount >= MAX_RETRIES).
+// Only the partner who started the plan can delete it; the other partner can
+// leave it instead (DELETE /api/weddings/:weddingId/members/:memberId).
 
 router.delete(
   "/:weddingId",
   requireAuth,
-  requireWeddingFromParams,
+  requireMembershipFromParams,
   async (req, res) => {
-    const weddingId = getAuthorizedResource<Wedding>(req).id;
+    const membership = getAuthorizedResource<WeddingMembership>(req);
+    if (membership.role !== "owner") {
+      res.status(403).json({
+        error:
+          "Only the partner who started this plan can delete it. You can leave it instead.",
+        code: "OWNER_ONLY",
+      });
+      return;
+    }
+    const weddingId = membership.wedding.id;
 
     // Remove the timeline first (FK), then the wedding.
     await db

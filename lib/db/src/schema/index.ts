@@ -4,3 +4,4 @@ export * from "./timelines";
 export * from "./quotes";
 export * from "./aiWorkflowRuns";
 export * from "./milestones";
+export * from "./weddingMembers";

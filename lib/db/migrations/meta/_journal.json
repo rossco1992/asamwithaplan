@@ -29,6 +29,13 @@
       "when": 1794867757838,
       "tag": "0003_journey_milestones",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794921765669,
+      "tag": "0004_couple_sharing",
+      "breakpoints": true
     }
   ]
 }
