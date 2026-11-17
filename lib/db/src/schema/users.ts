@@ -6,6 +6,8 @@ export const usersTable = pgTable("users", {
   id: serial("id").primaryKey(),
   clerkId: text("clerk_id").notNull().unique(),
   email: text("email").notNull(),
+  // Shown to the other partner and used for the couple's initials on the map.
+  firstName: text("first_name"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

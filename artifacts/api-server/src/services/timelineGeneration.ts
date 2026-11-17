@@ -20,7 +20,11 @@ export const TimelineGenerationJobSchema = z.object({
   requestId: z.string().min(1).max(200),
   attempt: z.number().int().min(1).max(MAX_TIMELINE_ATTEMPTS),
   weddingId: z.number().int().positive(),
-  weddingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  // Null while the couple hasn't picked a date.
+  weddingDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .nullable(),
   city: z.string().min(1).max(100),
   guestCount: z.number().int().min(1).max(10000),
   style: z.enum(["intimate", "standard", "large"]),
@@ -66,7 +70,10 @@ STRICT LIMITS — you MUST respect these or the output will be rejected:
 
 function buildUserPrompt(job: TimelineGenerationJob): string {
   const today = new Date().toISOString().split("T")[0];
-  return `Wedding: ${job.weddingDate} in ${job.city}. Guests: ${job.guestCount}. Style: ${job.style}. Today: ${today}. Generate a concise timeline — max 24 entries, 2–3 tasks each. Keep it short enough that the full JSON fits in your response.`;
+  const when = job.weddingDate
+    ? `Wedding: ${job.weddingDate} in ${job.city}.`
+    : `Wedding in ${job.city}; the couple has not picked a date yet, so plan as if it is about 12 months away and do not mention specific dates.`;
+  return `${when} Guests: ${job.guestCount}. Style: ${job.style}. Today: ${today}. Generate a concise timeline — max 24 entries, 2–3 tasks each. Keep it short enough that the full JSON fits in your response.`;
 }
 
 export async function recordTimelineGenerationFailure(

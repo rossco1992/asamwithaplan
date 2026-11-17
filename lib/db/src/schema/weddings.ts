@@ -10,10 +10,12 @@ export type GenerationStatus = "generating" | "ready" | "failed";
 
 export const weddingsTable = pgTable("weddings", {
   id: serial("id").primaryKey(),
+  // The partner who created the plan. Access goes through wedding_members.
   userId: integer("user_id")
     .notNull()
     .references(() => usersTable.id),
-  weddingDate: date("wedding_date").notNull(),
+  // Null until the couple picks a date; the journey is then planned by phase.
+  weddingDate: date("wedding_date"),
   city: text("city").notNull(),
   guestCount: integer("guest_count").notNull(),
   style: text("style").$type<WeddingStyle>().notNull(),

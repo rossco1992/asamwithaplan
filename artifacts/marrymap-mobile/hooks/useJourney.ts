@@ -5,7 +5,7 @@ import { localToday, type Journey, type MilestoneWhen } from '@/lib/journey';
 
 type JourneyState =
   | { kind: 'loading' }
-  | { kind: 'error'; message: string }
+  | { kind: 'error'; message: string; status: number }
   | { kind: 'ready'; journey: Journey };
 
 export interface JourneyActions {
@@ -29,7 +29,6 @@ export function useJourney(weddingId: number): { state: JourneyState; actions: J
   // Changes run one at a time, so a slow response can never land after a
   // newer one and undo it on screen.
   const queue = useRef<Promise<unknown>>(Promise.resolve());
-  const lastToday = useRef<string | null>(null);
 
   useEffect(() => {
     mounted.current = true;
@@ -45,10 +44,9 @@ export function useJourney(weddingId: number): { state: JourneyState; actions: J
     const result = await apiFetch<Journey>(withToday(base));
     if (!mounted.current) return;
     if (result.ok) {
-      lastToday.current = result.data.today;
       setState({ kind: 'ready', journey: result.data });
     } else {
-      setState({ kind: 'error', message: result.error });
+      setState({ kind: 'error', message: result.error, status: result.status });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [base]);
@@ -57,10 +55,11 @@ export function useJourney(weddingId: number): { state: JourneyState; actions: J
     refresh();
   }, [refresh]);
 
-  // Coming back to the app on a new day moves the countdown and overdue stops on.
+  // Coming back to the app picks up what the other partner changed, and on a
+  // new day moves the countdown and overdue stops on.
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (next) => {
-      if (next === 'active' && lastToday.current !== localToday()) {
+      if (next === 'active') {
         queue.current = queue.current.then(refresh, refresh);
       }
     });
@@ -80,7 +79,6 @@ export function useJourney(weddingId: number): { state: JourneyState; actions: J
           setError(result.error);
           return false;
         }
-        lastToday.current = result.data.journey.today;
         setState({ kind: 'ready', journey: result.data.journey });
         return true;
       };

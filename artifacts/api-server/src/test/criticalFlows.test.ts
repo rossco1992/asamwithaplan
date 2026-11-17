@@ -16,17 +16,26 @@ const {
   quotesTable,
   timelinesTable,
   usersTable,
+  weddingInvitesTable,
+  weddingMembersTable,
   weddingsTable,
 } = dbModule;
 const { openai } = await import("@workspace/integrations-openai-ai-server");
 const { default: apiRouter } = await import("../routes/index");
 const { MILESTONE_TEMPLATES } = await import("../lib/milestoneTemplates");
+const { hashInviteCode } = await import("../lib/inviteCodes");
 const { dispatchTimelineGeneration } =
   await import("../services/timelineGeneration");
 const { default: serverless } =
   await import("../../../../lib/serverless-http/serverless-http.js");
 
-type OperationKind = "select" | "insert" | "update" | "delete" | "transaction";
+type OperationKind =
+  | "select"
+  | "insert"
+  | "update"
+  | "delete"
+  | "transaction"
+  | "execute";
 
 interface FakeDbOperation {
   kind: OperationKind;
@@ -55,6 +64,7 @@ interface FakeDbHarness {
 interface AwaitableBuilder extends PromiseLike<unknown> {
   from: (table: unknown) => AwaitableBuilder;
   innerJoin: (table: unknown, condition: unknown) => AwaitableBuilder;
+  leftJoin: (table: unknown, condition: unknown) => AwaitableBuilder;
   where: (...conditions: unknown[]) => AwaitableBuilder;
   orderBy: (...values: unknown[]) => AwaitableBuilder;
   limit: (value: number) => AwaitableBuilder;
@@ -77,6 +87,10 @@ function createBuilder(
       return builder;
     },
     innerJoin(table: unknown, _condition: unknown) {
+      operation.joins.push(table);
+      return builder;
+    },
+    leftJoin(table: unknown, _condition: unknown) {
       operation.joins.push(table);
       return builder;
     },
@@ -144,6 +158,7 @@ function installFakeDb(plan: FakeDbPlan = {}): FakeDbHarness {
     update: mutableDb.update,
     delete: mutableDb.delete,
     transaction: mutableDb.transaction,
+    execute: mutableDb.execute,
   };
 
   const nextResult = (kind: keyof typeof results, required: boolean) => {
@@ -182,6 +197,12 @@ function installFakeDb(plan: FakeDbPlan = {}): FakeDbHarness {
     const operation: FakeDbOperation = { kind: "delete", table, joins: [] };
     operations.push(operation);
     return createBuilder(operation, nextResult("deletes", false));
+  };
+
+  // Raw SQL (the per-user advisory lock) is recorded and does nothing.
+  mutableDb.execute = async (query: unknown) => {
+    operations.push({ kind: "execute", values: query, joins: [] });
+    return { rows: [] };
   };
 
   // Run the callback against the same fake, recording that it was a transaction.
@@ -544,7 +565,7 @@ describe("critical MVP API flows", { concurrency: false }, () => {
   test("onboards a wedding and stores a deterministic generated timeline", async () => {
     await withHarness(
       {
-        selects: [[user], []],
+        selects: [[user], [], []],
         inserts: [[generatingWedding], []],
         updates: [[]],
         deletes: [[]],
@@ -594,6 +615,23 @@ describe("critical MVP API flows", { concurrency: false }, () => {
           city: generatingWedding.city,
           guestCount: generatingWedding.guestCount,
           style: generatingWedding.style,
+        });
+
+        // The creator becomes the owner in the same transaction as the wedding.
+        const kinds = dbHarness.operations.map((operation) => operation.kind);
+        const weddingInsertAt = dbHarness.operations.indexOf(weddingInsert!);
+        // Lock the user's plan choice, recheck, then create.
+        assert.deepEqual(kinds.slice(weddingInsertAt - 3, weddingInsertAt), [
+          "transaction",
+          "execute",
+          "select",
+        ]);
+        const memberInsert = dbHarness.operations[weddingInsertAt + 1];
+        assert.equal(memberInsert?.table, weddingMembersTable);
+        assert.deepEqual(memberInsert?.values, {
+          weddingId: generatingWedding.id,
+          userId: user.id,
+          role: "owner",
         });
 
         const timelineInsert = dbHarness.operations.find(
@@ -653,7 +691,7 @@ describe("critical MVP API flows", { concurrency: false }, () => {
       {
         selects: [
           [user],
-          [readyWedding],
+          [{ wedding: readyWedding }],
           [timeline],
           [{ wedding: failedWedding }],
         ],
@@ -1316,6 +1354,485 @@ describe("journey map milestones", { concurrency: false }, () => {
         assert.ok(
           dbHarness.operations.every((operation) => operation.kind === "select"),
         );
+      },
+    );
+  });
+});
+
+// ── Sharing a wedding and setting the date ────────────────────────────────────
+
+const partnerUser = {
+  id: 2,
+  clerkId: "clerk-user-b",
+  email: "partner@example.com",
+  firstName: "Sam",
+  createdAt,
+};
+const ownerMembership = [
+  { wedding: readyWedding, memberRole: "owner", userId: user.id },
+];
+const partnerMembership = [
+  { wedding: readyWedding, memberRole: "partner", userId: partnerUser.id },
+];
+const liveInvite = {
+  id: 70,
+  weddingId: readyWedding.id,
+  codeHash: hashInviteCode("ABCD2345"),
+  createdByUserId: user.id,
+  expiresAt: new Date(Date.now() + 86_400_000),
+  usedAt: null,
+  usedByUserId: null,
+  createdAt,
+};
+const ownerRow = {
+  id: 1,
+  userId: user.id,
+  role: "owner",
+  firstName: "Ross",
+  joinedAt: createdAt,
+};
+const partnerRow = {
+  id: 2,
+  userId: partnerUser.id,
+  role: "partner",
+  firstName: "Sam",
+  joinedAt: createdAt,
+};
+
+function onlyReads(operations: { kind: string }[]) {
+  return operations.every((operation) => operation.kind === "select");
+}
+
+describe("sharing a wedding and setting the date", { concurrency: false }, () => {
+  test("checks wedding access through membership, not the creator column", async () => {
+    await withHarness(
+      { selects: [[{ wedding: readyWedding }], [timeline]] },
+      [],
+      async ({ db: dbHarness }) => {
+        const response = await apiRequest(`/timelines/${readyWedding.id}`, {
+          userId: partnerUser.clerkId,
+        });
+        assert.equal(response.status, 200);
+        const lookup = dbHarness.operations[0]!;
+        assert.equal(lookup.table, weddingsTable);
+        assert.deepEqual(lookup.joins, [usersTable, weddingMembersTable]);
+      },
+    );
+  });
+
+  test("onboards a couple who haven't picked a date yet", async () => {
+    const undated = { ...generatingWedding, weddingDate: null };
+    await withHarness(
+      { selects: [[user], [], []], inserts: [[undated], []], updates: [[]] },
+      [{ content: JSON.stringify({ weeks: timelineWeeks }) }],
+      async ({ db: dbHarness, ai }) => {
+        const response = await apiRequest("/timelines/generate", {
+          method: "POST",
+          body: { city: "Austin, TX", guestCount: 80, style: "standard" },
+        });
+        assert.equal(response.status, 202);
+
+        const weddingInsert = dbHarness.operations.find(
+          (operation) =>
+            operation.kind === "insert" && operation.table === weddingsTable,
+        );
+        assert.equal(
+          (weddingInsert?.values as { weddingDate: unknown }).weddingDate,
+          null,
+        );
+
+        await waitFor(() => ai.calls.length === 1);
+        const prompt = JSON.stringify(ai.calls[0]);
+        assert.match(prompt, /not picked a date yet/);
+        assert.doesNotMatch(prompt, /Wedding: null/);
+      },
+    );
+  });
+
+  test("rejects an impossible wedding date at sign-up", async () => {
+    await withHarness({}, [], async ({ db: dbHarness }) => {
+      const response = await apiRequest("/timelines/generate", {
+        method: "POST",
+        body: {
+          weddingDate: "2027-02-30",
+          city: "Austin, TX",
+          guestCount: 80,
+          style: "standard",
+        },
+      });
+      assert.equal(response.status, 400);
+      assert.equal(dbHarness.operations.length, 0);
+    });
+  });
+
+  test("lets either partner set, change or clear the date", async () => {
+    const moved = { ...readyWedding, weddingDate: "2027-09-18" };
+    const cleared = { ...readyWedding, weddingDate: null };
+    await withHarness(
+      {
+        selects: [partnerMembership, ownerMembership],
+        updates: [[moved], [cleared]],
+      },
+      [],
+      async ({ db: dbHarness }) => {
+        const set = await apiRequest(`/weddings/${readyWedding.id}`, {
+          method: "PATCH",
+          userId: partnerUser.clerkId,
+          body: { weddingDate: "2027-09-18" },
+        });
+        assert.equal(set.status, 200);
+        assert.equal(
+          (set.body as { wedding: { weddingDate: string } }).wedding.weddingDate,
+          "2027-09-18",
+        );
+
+        const clear = await apiRequest(`/weddings/${readyWedding.id}`, {
+          method: "PATCH",
+          body: { weddingDate: null },
+        });
+        assert.equal(clear.status, 200);
+
+        const updates = dbHarness.operations.filter(
+          (operation) => operation.kind === "update",
+        );
+        assert.deepEqual(
+          updates.map((operation) => [operation.table, operation.values]),
+          [
+            [weddingsTable, { weddingDate: "2027-09-18" }],
+            [weddingsTable, { weddingDate: null }],
+          ],
+        );
+      },
+    );
+  });
+
+  test("refuses bad date changes and other couples' weddings", async () => {
+    await withHarness(
+      { selects: [ownerMembership, ownerMembership, []] },
+      [],
+      async ({ db: dbHarness }) => {
+        const impossible = await apiRequest(`/weddings/${readyWedding.id}`, {
+          method: "PATCH",
+          body: { weddingDate: "2027-13-01" },
+        });
+        assert.equal(impossible.status, 400);
+
+        const extra = await apiRequest(`/weddings/${readyWedding.id}`, {
+          method: "PATCH",
+          body: { weddingDate: "2027-09-18", city: "Elsewhere" },
+        });
+        assert.equal(extra.status, 400);
+
+        const foreign = await apiRequest("/weddings/999", {
+          method: "PATCH",
+          body: { weddingDate: "2027-09-18" },
+        });
+        assert.equal(foreign.status, 404);
+        assert.deepEqual(foreign.body, { error: "Wedding not found" });
+        assert.ok(onlyReads(dbHarness.operations));
+      },
+    );
+  });
+
+  test("lists the couple and says who is who", async () => {
+    await withHarness(
+      { selects: [partnerMembership, [ownerRow, partnerRow], []] },
+      [],
+      async () => {
+        const response = await apiRequest(`/weddings/${readyWedding.id}/members`, {
+          userId: partnerUser.clerkId,
+        });
+        assert.equal(response.status, 200);
+        const body = response.body as {
+          members: Array<{ id: number; role: string; firstName: string; isYou: boolean }>;
+          canInvite: boolean;
+          pendingInvite: unknown;
+        };
+        assert.deepEqual(
+          body.members.map(({ id, role, firstName, isYou }) => ({ id, role, firstName, isYou })),
+          [
+            { id: 1, role: "owner", firstName: "Ross", isYou: false },
+            { id: 2, role: "partner", firstName: "Sam", isYou: true },
+          ],
+        );
+        assert.equal(body.canInvite, false);
+        assert.equal(body.pendingInvite, null);
+      },
+    );
+  });
+
+  test("makes a single-use invite code and stores only its hash", async () => {
+    await withHarness(
+      { selects: [ownerMembership, [ownerRow]] },
+      [],
+      async ({ db: dbHarness }) => {
+        const before = Date.now();
+        const response = await apiRequest(`/weddings/${readyWedding.id}/invites`, {
+          method: "POST",
+        });
+        assert.equal(response.status, 201);
+        const { code, expiresAt } = response.body as { code: string; expiresAt: string };
+        assert.match(code, /^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/);
+
+        const lifetime = new Date(expiresAt).getTime() - before;
+        assert.ok(lifetime > 6.9 * 86_400_000 && lifetime < 7.1 * 86_400_000);
+
+        // Earlier unused codes are cleared in the same transaction.
+        const kinds = dbHarness.operations.map((operation) => operation.kind);
+        assert.deepEqual(kinds.slice(-3), ["transaction", "delete", "insert"]);
+        assert.equal(dbHarness.operations.at(-2)?.table, weddingInvitesTable);
+
+        const stored = dbHarness.operations.at(-1)?.values as Record<string, unknown>;
+        assert.equal(stored.codeHash, hashInviteCode(code.replace("-", "")));
+        assert.ok(!JSON.stringify(stored).includes(code.replace("-", "")));
+        assert.equal(stored.createdByUserId, user.id);
+      },
+    );
+  });
+
+  test("won't make a code once both partners have joined", async () => {
+    await withHarness(
+      { selects: [ownerMembership, [ownerRow, partnerRow]] },
+      [],
+      async ({ db: dbHarness }) => {
+        const response = await apiRequest(`/weddings/${readyWedding.id}/invites`, {
+          method: "POST",
+        });
+        assert.equal(response.status, 409);
+        assert.ok(onlyReads(dbHarness.operations));
+      },
+    );
+  });
+
+  test("joins the partner with a code typed loosely", async () => {
+    await withHarness(
+      {
+        selects: [[partnerUser], [liveInvite], [], []],
+        updates: [[{ ...liveInvite, usedAt: createdAt }]],
+        inserts: [[{ id: 2, weddingId: readyWedding.id, userId: partnerUser.id, role: "partner" }]],
+      },
+      [],
+      async ({ db: dbHarness }) => {
+        const response = await apiRequest("/invites/accept", {
+          method: "POST",
+          userId: partnerUser.clerkId,
+          body: { code: " abcd-2345 " },
+        });
+        assert.equal(response.status, 200);
+        assert.deepEqual(response.body, { weddingId: readyWedding.id });
+
+        const claim = dbHarness.operations.find((operation) => operation.kind === "update");
+        assert.equal(claim?.table, weddingInvitesTable);
+        assert.equal((claim?.values as { usedByUserId: number }).usedByUserId, partnerUser.id);
+        const member = dbHarness.operations.find((operation) => operation.kind === "insert");
+        assert.equal(member?.table, weddingMembersTable);
+        assert.deepEqual(member?.values, {
+          weddingId: readyWedding.id,
+          userId: partnerUser.id,
+          role: "partner",
+        });
+      },
+    );
+  });
+
+  test("gives wrong, used and malformed codes the same answer, then slows guessing", async () => {
+    const guesser = { ...partnerUser, id: 3, clerkId: "clerk-user-guesser" };
+    const selects: unknown[] = [];
+    // Two malformed codes (user lookup only), then three well-formed misses.
+    selects.push([guesser], [guesser]);
+    for (let i = 0; i < 3; i += 1) selects.push([guesser], []);
+    selects.push([guesser]);
+
+    await withHarness({ selects }, [], async ({ db: dbHarness }) => {
+      const answers = [];
+      for (const code of ["hello", "ABCD-234O", "ABCD-2346", "ZZZZ-ZZZZ", "QQQQ-2222"]) {
+        answers.push(
+          await apiRequest("/invites/accept", {
+            method: "POST",
+            userId: guesser.clerkId,
+            body: { code },
+          }),
+        );
+      }
+      for (const answer of answers) {
+        assert.equal(answer.status, 404);
+        assert.deepEqual(answer.body, answers[0]!.body);
+      }
+
+      const blocked = await apiRequest("/invites/accept", {
+        method: "POST",
+        userId: guesser.clerkId,
+        body: { code: "ABCD-2345" },
+      });
+      assert.equal(blocked.status, 429);
+      assert.ok(onlyReads(dbHarness.operations));
+    });
+  });
+
+  test("won't move someone who is already planning another wedding", async () => {
+    const theirOwn = { ...readyWedding, id: 11 };
+    await withHarness(
+      { selects: [[partnerUser], [liveInvite], [{ wedding: theirOwn }]] },
+      [],
+      async ({ db: dbHarness }) => {
+        const response = await apiRequest("/invites/accept", {
+          method: "POST",
+          userId: partnerUser.clerkId,
+          body: { code: "ABCD-2345" },
+        });
+        assert.equal(response.status, 409);
+        assert.equal((response.body as { code: string }).code, "ALREADY_PLANNING");
+        assert.ok(onlyReads(dbHarness.operations));
+      },
+    );
+  });
+
+  test("refuses a third person even with a live code", async () => {
+    await withHarness(
+      {
+        selects: [[partnerUser], [liveInvite], [], []],
+        updates: [[{ ...liveInvite, usedAt: createdAt }]],
+        inserts: [[]],
+      },
+      [],
+      async () => {
+        const response = await apiRequest("/invites/accept", {
+          method: "POST",
+          userId: partnerUser.clerkId,
+          body: { code: "ABCD-2345" },
+        });
+        assert.equal(response.status, 409);
+        assert.equal((response.body as { code: string }).code, "PARTNER_ALREADY_JOINED");
+      },
+    );
+  });
+
+  test("only the partner who started the plan can delete it", async () => {
+    await withHarness({ selects: [partnerMembership] }, [], async ({ db: dbHarness }) => {
+      const response = await apiRequest(`/timelines/${readyWedding.id}`, {
+        method: "DELETE",
+        userId: partnerUser.clerkId,
+      });
+      assert.equal(response.status, 403);
+      assert.ok(onlyReads(dbHarness.operations));
+    });
+  });
+
+  test("the partner can leave, and the owner can remove them but not themselves", async () => {
+    const partnerMember = { id: 2, weddingId: readyWedding.id, userId: partnerUser.id, role: "partner" };
+    const ownerMember = { id: 1, weddingId: readyWedding.id, userId: user.id, role: "owner" };
+    await withHarness(
+      {
+        selects: [
+          partnerMembership, [partnerMember],
+          ownerMembership, [partnerMember],
+          ownerMembership, [ownerMember],
+          partnerMembership, [ownerMember],
+        ],
+      },
+      [],
+      async ({ db: dbHarness }) => {
+        const leave = await apiRequest(`/weddings/${readyWedding.id}/members/2`, {
+          method: "DELETE",
+          userId: partnerUser.clerkId,
+        });
+        assert.equal(leave.status, 200);
+
+        const remove = await apiRequest(`/weddings/${readyWedding.id}/members/2`, {
+          method: "DELETE",
+        });
+        assert.equal(remove.status, 200);
+
+        const ownerLeaves = await apiRequest(`/weddings/${readyWedding.id}/members/1`, {
+          method: "DELETE",
+        });
+        assert.equal(ownerLeaves.status, 409);
+
+        const partnerRemovesOwner = await apiRequest(`/weddings/${readyWedding.id}/members/1`, {
+          method: "DELETE",
+          userId: partnerUser.clerkId,
+        });
+        assert.equal(partnerRemovesOwner.status, 404);
+
+        const deletes = dbHarness.operations.filter((operation) => operation.kind === "delete");
+        assert.equal(deletes.length, 2);
+        assert.ok(deletes.every((operation) => operation.table === weddingMembersTable));
+      },
+    );
+  });
+
+  test("the creator keeps owner access even without an owner membership row", async () => {
+    await withHarness(
+      {
+        selects: [[{ wedding: readyWedding, memberRole: null, userId: user.id }]],
+        deletes: [[], []],
+      },
+      [],
+      async ({ db: dbHarness }) => {
+        const response = await apiRequest(`/timelines/${readyWedding.id}`, {
+          method: "DELETE",
+        });
+        assert.equal(response.status, 200);
+        const deleted = dbHarness.operations
+          .filter((operation) => operation.kind === "delete")
+          .map((operation) => operation.table);
+        assert.deepEqual(deleted, [timelinesTable, weddingsTable]);
+      },
+    );
+  });
+
+  test("a code accepted while another request gave them a plan is refused", async () => {
+    const raced = { ...readyWedding, id: 12 };
+    await withHarness(
+      { selects: [[partnerUser], [liveInvite], [], [{ wedding: raced }]] },
+      [],
+      async ({ db: dbHarness }) => {
+        const response = await apiRequest("/invites/accept", {
+          method: "POST",
+          userId: partnerUser.clerkId,
+          body: { code: "ABCD-2345" },
+        });
+        assert.equal(response.status, 409);
+        assert.equal((response.body as { code: string }).code, "ALREADY_PLANNING");
+        const kinds = dbHarness.operations.map((operation) => operation.kind);
+        assert.ok(kinds.includes("execute"), "takes the per-user lock");
+        assert.ok(!kinds.includes("update") && !kinds.includes("insert"));
+      },
+    );
+  });
+
+  test("a second sign-up racing the first gets the plan that won", async () => {
+    await withHarness(
+      { selects: [[user], [], [{ wedding: generatingWedding }]] },
+      [],
+      async ({ db: dbHarness, ai }) => {
+        const response = await apiRequest("/timelines/generate", {
+          method: "POST",
+          body: { city: "Austin, TX", guestCount: 80, style: "standard" },
+        });
+        assert.equal(response.status, 202);
+        assert.deepEqual(response.body, {
+          weddingId: generatingWedding.id,
+          status: "generating",
+        });
+        assert.ok(!dbHarness.operations.some((operation) => operation.kind === "insert"));
+        assert.equal(ai.calls.length, 0);
+      },
+    );
+  });
+
+  test("keeps the first name current so the partner sees who joined", async () => {
+    await withHarness(
+      { selects: [[{ ...user, firstName: null }]], updates: [[{ ...user, firstName: "Ross" }]] },
+      [],
+      async ({ db: dbHarness }) => {
+        const response = await apiRequest("/users/me", {
+          method: "POST",
+          body: { firstName: "Ross" },
+        });
+        assert.equal(response.status, 200);
+        const update = dbHarness.operations.find((operation) => operation.kind === "update");
+        assert.deepEqual(update?.values, { firstName: "Ross" });
       },
     );
   });

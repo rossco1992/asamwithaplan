@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { useColors } from '@/hooks/useColors';
@@ -11,6 +11,10 @@ import { JourneyMap } from '@/components/journey/JourneyMap';
 import { JourneyList } from '@/components/journey/JourneyList';
 import { MilestoneSheet } from '@/components/journey/MilestoneSheet';
 import { AddMilestoneSheet } from '@/components/journey/AddMilestoneSheet';
+import { DateSheet } from '@/components/journey/DateSheet';
+import { CoupleSheet } from '@/components/journey/CoupleSheet';
+import { useCouple } from '@/hooks/useCouple';
+import { coupleInitials, partnerOf } from '@/lib/couple';
 import type { JourneyNode, PhaseKey } from '@/lib/journey';
 import type { TimelineData, WeddingData } from '@/app/(home)/index';
 
@@ -18,12 +22,22 @@ interface Props {
   wedding: WeddingData;
   timeline: TimelineData;
   initials: string;
+  /** The date changed here, so the rest of the app shows it too. */
+  onWeddingDateChange: (weddingDate: string | null) => void;
+  /** This partner left the plan. */
+  onLeft: () => void;
 }
 
 /** Home once a wedding exists: the journey map, its list view, and Sam's week-by-week plan. */
-export function JourneyScreen({ wedding, timeline, initials }: Props) {
+export function JourneyScreen({ wedding, timeline, initials, onWeddingDateChange, onLeft }: Props) {
   const colors = useColors();
   const { state, actions, error } = useJourney(wedding.id);
+  const couple = useCouple(wedding.id);
+  const [editingDate, setEditingDate] = useState(false);
+  const [coupleOpen, setCoupleOpen] = useState(false);
+  const members = couple.couple?.members ?? [];
+  const mapInitials = coupleInitials(members, initials);
+  const partnerJoined = partnerOf(members) !== null;
   const [view, setView] = useState<JourneyView>('map');
   const [openId, setOpenId] = useState<number | null>(null);
   const [adding, setAdding] = useState<{ phase: PhaseKey | null } | null>(null);
@@ -37,6 +51,12 @@ export function JourneyScreen({ wedding, timeline, initials }: Props) {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setAdding({ phase });
   }, []);
+
+  // The other partner removed this person, or deleted the plan.
+  const lostAccess = state.kind === 'error' && state.status === 404;
+  useEffect(() => {
+    if (lostAccess) onLeft();
+  }, [lostAccess, onLeft]);
 
   if (state.kind === 'loading') return <GeneratingState />;
 
@@ -70,10 +90,14 @@ export function JourneyScreen({ wedding, timeline, initials }: Props) {
           setView(next);
         }}
         onAdd={() => setAdding({ phase: null })}
+        onEditDate={() => setEditingDate(true)}
+        onOpenCouple={() => setCoupleOpen(true)}
+        coupleInitials={mapInitials}
+        partnerJoined={partnerJoined}
       />
 
       {view === 'map' ? (
-        <JourneyMap journey={journey} initials={initials} onOpenMilestone={openMilestone} onAddNear={addNear} />
+        <JourneyMap journey={journey} initials={mapInitials} onOpenMilestone={openMilestone} onAddNear={addNear} />
       ) : null}
       {view === 'list' ? <JourneyList journey={journey} onOpenMilestone={openMilestone} /> : null}
       {view === 'plan' ? <TimelineView timeline={timeline} wedding={wedding} /> : null}
@@ -88,6 +112,18 @@ export function JourneyScreen({ wedding, timeline, initials }: Props) {
         error={error}
         onClose={() => setAdding(null)}
       />
+      <DateSheet
+        visible={editingDate}
+        weddingDate={journey.weddingDate}
+        today={journey.today}
+        couple={couple}
+        onSaved={(next) => {
+          onWeddingDateChange(next);
+          actions.refresh();
+        }}
+        onClose={() => setEditingDate(false)}
+      />
+      <CoupleSheet visible={coupleOpen} couple={couple} onLeft={onLeft} onClose={() => setCoupleOpen(false)} />
     </View>
   );
 }

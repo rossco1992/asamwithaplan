@@ -14,22 +14,26 @@ import { useColors } from '@/hooks/useColors';
 import { fonts } from '@/constants/colors';
 import { useApi } from '@/hooks/useApi';
 import { OnboardingForm } from '@/components/OnboardingForm';
+import { JoinPlanForm } from '@/components/JoinPlanForm';
 import { GeneratingState } from '@/components/GeneratingState';
 import { JourneyScreen } from '@/components/journey/JourneyScreen';
 import { initialsFor } from '@/lib/journey';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
 
-const WEDDING_ID_KEY = 'sam_wedding_id';
+// Earlier builds kept the wedding ID on the device. The server now says which
+// plan you're in, so a partner who joins on their own phone lands in it too.
+const LEGACY_WEDDING_ID_KEY = 'sam_wedding_id';
 
 export interface TimelineTask { title: string; priority: 'urgent' | 'this-week' | 'upcoming'; }
 export interface TimelineWeek { weekLabel: string; phase: string; tasks: TimelineTask[]; }
 export interface TimelineData { id: number; weddingId: number; generatedAt: string; tasks: TimelineWeek[]; }
-export interface WeddingData { id: number; weddingDate: string; city: string; guestCount: number; style: string; }
+export interface WeddingData { id: number; weddingDate: string | null; city: string; guestCount: number; style: string; }
 
 type ScreenState =
   | { kind: 'loading' }
   | { kind: 'form' }
+  | { kind: 'join' }
   | { kind: 'generating'; weddingId: number }
   | { kind: 'ready'; timeline: TimelineData; wedding: WeddingData };
 
@@ -42,33 +46,34 @@ export default function HomeScreen() {
   const { apiFetch } = useApi();
   const [state, setState] = useState<ScreenState>({ kind: 'loading' });
 
-  // Provision the DB user and load any existing wedding/timeline
+  // Provision the DB user, then load the plan they started or joined.
   useEffect(() => {
     let cancelled = false;
 
     const init = async () => {
-      // JIT-provision DB user
-      apiFetch('/users/me', { method: 'POST' }).catch(() => {});
+      await apiFetch('/users/me', {
+        method: 'POST',
+        body: JSON.stringify(user?.firstName ? { firstName: user.firstName } : {}),
+      });
+      AsyncStorage.removeItem(LEGACY_WEDDING_ID_KEY).catch(() => {});
 
-      const storedId = await AsyncStorage.getItem(WEDDING_ID_KEY);
-      if (!storedId || cancelled) {
-        if (!cancelled) setState({ kind: 'form' });
-        return;
-      }
-      const weddingId = parseInt(storedId, 10);
-      if (isNaN(weddingId)) {
-        if (!cancelled) setState({ kind: 'form' });
-        return;
-      }
-      const result = await apiFetch<{ status: string; timeline?: TimelineData; wedding?: WeddingData }>(
-        `/timelines/${weddingId}`
-      );
+      const result = await apiFetch<{
+        status: string;
+        weddingId?: number;
+        timeline?: TimelineData;
+        wedding?: WeddingData;
+      }>('/timelines/current');
       if (cancelled) return;
-      if (!result.ok) { setState({ kind: 'form' }); return; }
+      if (!result.ok) {
+        setState({ kind: 'form' });
+        return;
+      }
       if (result.data.status === 'ready' && result.data.timeline && result.data.wedding) {
         setState({ kind: 'ready', timeline: result.data.timeline, wedding: result.data.wedding });
+      } else if (result.data.weddingId) {
+        setState({ kind: 'generating', weddingId: result.data.weddingId });
       } else {
-        setState({ kind: 'generating', weddingId });
+        setState({ kind: 'form' });
       }
     };
 
@@ -95,13 +100,18 @@ export default function HomeScreen() {
   }, [state]);
 
   const handleFormSubmit = useCallback((weddingId: number) => {
-    AsyncStorage.setItem(WEDDING_ID_KEY, String(weddingId));
     setState({ kind: 'generating', weddingId });
+  }, []);
+
+  const handleWeddingDateChange = useCallback((weddingDate: string | null) => {
+    setState((current) =>
+      current.kind === 'ready' ? { ...current, wedding: { ...current.wedding, weddingDate } } : current,
+    );
   }, []);
 
   const handleSignOut = useCallback(async () => {
     Haptics.selectionAsync();
-    await AsyncStorage.removeItem(WEDDING_ID_KEY);
+    await AsyncStorage.removeItem(LEGACY_WEDDING_ID_KEY);
     await signOut();
     router.replace('/(auth)/sign-in');
   }, [signOut, router]);
@@ -127,13 +137,20 @@ export default function HomeScreen() {
 
       {/* Content */}
       {state.kind === 'loading' && <GeneratingState />}
-      {state.kind === 'form' && <OnboardingForm onSubmit={handleFormSubmit} />}
+      {state.kind === 'form' && (
+        <OnboardingForm onSubmit={handleFormSubmit} onJoin={() => setState({ kind: 'join' })} />
+      )}
+      {state.kind === 'join' && (
+        <JoinPlanForm onJoined={handleFormSubmit} onBack={() => setState({ kind: 'form' })} />
+      )}
       {state.kind === 'generating' && <GeneratingState />}
       {state.kind === 'ready' && (
         <JourneyScreen
           wedding={state.wedding}
           timeline={state.timeline}
           initials={initialsFor(user?.fullName ?? displayName)}
+          onWeddingDateChange={handleWeddingDateChange}
+          onLeft={() => setState({ kind: 'form' })}
         />
       )}
     </View>

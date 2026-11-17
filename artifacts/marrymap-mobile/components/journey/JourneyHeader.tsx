@@ -50,9 +50,23 @@ interface Props {
   view: JourneyView;
   onChangeView: (view: JourneyView) => void;
   onAdd: () => void;
+  onEditDate: () => void;
+  onOpenCouple: () => void;
+  /** "RS" once both partners are in; shown on the couple button. */
+  coupleInitials: string;
+  partnerJoined: boolean;
 }
 
-export function JourneyHeader({ journey, view, onChangeView, onAdd }: Props) {
+export function JourneyHeader({
+  journey,
+  view,
+  onChangeView,
+  onAdd,
+  onEditDate,
+  onOpenCouple,
+  coupleInitials,
+  partnerJoined,
+}: Props) {
   const colors = useColors();
   const { daysToGo, weddingDate, progress } = journey;
 
@@ -66,18 +80,23 @@ export function JourneyHeader({ journey, view, onChangeView, onAdd }: Props) {
   return (
     <View style={[styles.wrapper, { borderBottomColor: colors.border, backgroundColor: colors.background }]}>
       <View style={styles.topRow}>
-        <View
-          style={styles.countdown}
-          accessible
+        <Pressable
+          onPress={onEditDate}
+          style={({ pressed }) => [styles.countdown, pressed && { opacity: 0.7 }]}
+          accessibilityRole="button"
           accessibilityLabel={`${countdown}. ${progress.done} of ${progress.total} milestones done.`}
+          accessibilityHint={weddingDate ? 'Change the wedding date' : 'Set the wedding date'}
         >
           <Text style={[styles.countdownText, { color: colors.primary }]}>{countdown}</Text>
           <Text style={[styles.meta, { color: colors.mutedForeground }]}>
-            {weddingDate ? formatDate(weddingDate, { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' }) : 'Planning by phase until you pick a date'}
+            {weddingDate ? formatDate(weddingDate, { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' }) : 'Planning by stage'}
             {'  ·  '}
             {progress.done} of {progress.total} done
           </Text>
-        </View>
+          <Text style={[styles.dateLink, { color: colors.accent }]}>
+            {weddingDate ? 'Change date' : 'Set your date'}
+          </Text>
+        </Pressable>
         <ProgressRing percent={progress.percent} />
       </View>
 
@@ -107,6 +126,25 @@ export function JourneyHeader({ journey, view, onChangeView, onAdd }: Props) {
           })}
         </View>
         <Pressable
+          onPress={onOpenCouple}
+          accessibilityRole="button"
+          accessibilityLabel={partnerJoined ? 'Your plan together' : 'Invite your partner'}
+          hitSlop={8}
+          style={({ pressed }) => [
+            styles.coupleButton,
+            { borderColor: colors.border, backgroundColor: colors.card },
+            pressed && { opacity: 0.8 },
+          ]}
+        >
+          {partnerJoined ? (
+            <Text style={[styles.coupleText, { color: colors.primary }]} maxFontSizeMultiplier={1.2}>
+              {coupleInitials}
+            </Text>
+          ) : (
+            <Ionicons name="person-add-outline" size={18} color={colors.primary} />
+          )}
+        </Pressable>
+        <Pressable
           onPress={onAdd}
           accessibilityRole="button"
           accessibilityLabel="Add a milestone"
@@ -132,6 +170,7 @@ const styles = StyleSheet.create({
   countdown: { flex: 1 },
   countdownText: { fontFamily: fonts.serifBold, fontSize: 26, letterSpacing: -0.4 },
   meta: { fontFamily: fonts.sans, fontSize: 13, marginTop: 2 },
+  dateLink: { fontFamily: fonts.sansMedium, fontSize: 13, marginTop: 4 },
   ringText: { fontFamily: fonts.sansSemiBold, fontSize: 13 },
   controls: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   segmented: { flex: 1, flexDirection: 'row', borderRadius: 10, padding: 3 },
@@ -144,5 +183,14 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   segmentText: { fontFamily: fonts.sansMedium, fontSize: 13 },
+  coupleButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  coupleText: { fontFamily: fonts.serifBold, fontSize: 13, letterSpacing: 0.5 },
   addButton: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
 });
