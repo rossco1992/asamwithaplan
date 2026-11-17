@@ -13,6 +13,7 @@ import {
   getAuthorizedWedding,
   getCurrentWeddingForUser,
   getWeddingMembership,
+  lockUserPlanChoice,
   type WeddingMembership,
 } from "../lib/authorization";
 import { isIsoDate } from "../lib/milestoneSchedule";
@@ -149,8 +150,13 @@ router.post("/generate", requireAuth, async (req, res) => {
   }
 
   // The wedding and its owner membership land together, so a plan is never
-  // left without anyone who can open it.
-  const wedding = await db.transaction(async (tx) => {
+  // left without anyone who can open it. The per-user lock, shared with
+  // joining a partner's plan, stops two requests giving someone two plans.
+  const outcome = await db.transaction(async (tx) => {
+    await lockUserPlanChoice(tx, userId);
+    const raced = await getCurrentWeddingForUser(userId, tx);
+    if (raced) return { existing: raced, created: null } as const;
+
     const [created] = await tx
       .insert(weddingsTable)
       .values({ userId, weddingDate, city, guestCount, style })
@@ -158,8 +164,16 @@ router.post("/generate", requireAuth, async (req, res) => {
     await tx
       .insert(weddingMembersTable)
       .values({ weddingId: created.id, userId, role: "owner" });
-    return created;
+    return { existing: null, created } as const;
   });
+  if (outcome.existing) {
+    res.status(202).json({
+      weddingId: outcome.existing.id,
+      status: outcome.existing.generationStatus,
+    });
+    return;
+  }
+  const wedding = outcome.created;
 
   const generationJob: TimelineGenerationJob = {
     runId: createAiRunId(),

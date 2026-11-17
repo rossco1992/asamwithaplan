@@ -15,6 +15,13 @@ both have the same access except where the table below says otherwise.
 - `getAuthorizedQuote` resolves a quote through its wedding and the caller's
   membership in one query.
 - `getCurrentWeddingForUser` finds the wedding a user started or joined.
+- The wedding's creator (`weddings.user_id`) always counts as its owner, so a
+  database whose owner rows were never backfilled can't lock anyone out.
+  `pnpm db:push` runs `lib/db/scripts/backfill.mjs` after the schema push to
+  add those rows.
+- Creating a plan and accepting an invite take the same per-user Postgres
+  advisory lock and recheck the user's plan inside it, so concurrent requests
+  can't put one person in two plans.
 - `requireResourceAccess` validates the supplied resource ID, performs the
   member-scoped lookup, and attaches only an authorized resource to the request.
 - A missing resource and another user's resource both return the same `404`

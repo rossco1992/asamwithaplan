@@ -29,7 +29,13 @@ const { dispatchTimelineGeneration } =
 const { default: serverless } =
   await import("../../../../lib/serverless-http/serverless-http.js");
 
-type OperationKind = "select" | "insert" | "update" | "delete" | "transaction";
+type OperationKind =
+  | "select"
+  | "insert"
+  | "update"
+  | "delete"
+  | "transaction"
+  | "execute";
 
 interface FakeDbOperation {
   kind: OperationKind;
@@ -58,6 +64,7 @@ interface FakeDbHarness {
 interface AwaitableBuilder extends PromiseLike<unknown> {
   from: (table: unknown) => AwaitableBuilder;
   innerJoin: (table: unknown, condition: unknown) => AwaitableBuilder;
+  leftJoin: (table: unknown, condition: unknown) => AwaitableBuilder;
   where: (...conditions: unknown[]) => AwaitableBuilder;
   orderBy: (...values: unknown[]) => AwaitableBuilder;
   limit: (value: number) => AwaitableBuilder;
@@ -80,6 +87,10 @@ function createBuilder(
       return builder;
     },
     innerJoin(table: unknown, _condition: unknown) {
+      operation.joins.push(table);
+      return builder;
+    },
+    leftJoin(table: unknown, _condition: unknown) {
       operation.joins.push(table);
       return builder;
     },
@@ -147,6 +158,7 @@ function installFakeDb(plan: FakeDbPlan = {}): FakeDbHarness {
     update: mutableDb.update,
     delete: mutableDb.delete,
     transaction: mutableDb.transaction,
+    execute: mutableDb.execute,
   };
 
   const nextResult = (kind: keyof typeof results, required: boolean) => {
@@ -185,6 +197,12 @@ function installFakeDb(plan: FakeDbPlan = {}): FakeDbHarness {
     const operation: FakeDbOperation = { kind: "delete", table, joins: [] };
     operations.push(operation);
     return createBuilder(operation, nextResult("deletes", false));
+  };
+
+  // Raw SQL (the per-user advisory lock) is recorded and does nothing.
+  mutableDb.execute = async (query: unknown) => {
+    operations.push({ kind: "execute", values: query, joins: [] });
+    return { rows: [] };
   };
 
   // Run the callback against the same fake, recording that it was a transaction.
@@ -547,7 +565,7 @@ describe("critical MVP API flows", { concurrency: false }, () => {
   test("onboards a wedding and stores a deterministic generated timeline", async () => {
     await withHarness(
       {
-        selects: [[user], []],
+        selects: [[user], [], []],
         inserts: [[generatingWedding], []],
         updates: [[]],
         deletes: [[]],
@@ -602,7 +620,12 @@ describe("critical MVP API flows", { concurrency: false }, () => {
         // The creator becomes the owner in the same transaction as the wedding.
         const kinds = dbHarness.operations.map((operation) => operation.kind);
         const weddingInsertAt = dbHarness.operations.indexOf(weddingInsert!);
-        assert.equal(kinds[weddingInsertAt - 1], "transaction");
+        // Lock the user's plan choice, recheck, then create.
+        assert.deepEqual(kinds.slice(weddingInsertAt - 3, weddingInsertAt), [
+          "transaction",
+          "execute",
+          "select",
+        ]);
         const memberInsert = dbHarness.operations[weddingInsertAt + 1];
         assert.equal(memberInsert?.table, weddingMembersTable);
         assert.deepEqual(memberInsert?.values, {
@@ -1345,9 +1368,11 @@ const partnerUser = {
   firstName: "Sam",
   createdAt,
 };
-const ownerMembership = [{ wedding: readyWedding, role: "owner", userId: user.id }];
+const ownerMembership = [
+  { wedding: readyWedding, memberRole: "owner", userId: user.id },
+];
 const partnerMembership = [
-  { wedding: readyWedding, role: "partner", userId: partnerUser.id },
+  { wedding: readyWedding, memberRole: "partner", userId: partnerUser.id },
 ];
 const liveInvite = {
   id: 70,
@@ -1390,7 +1415,7 @@ describe("sharing a wedding and setting the date", { concurrency: false }, () =>
         assert.equal(response.status, 200);
         const lookup = dbHarness.operations[0]!;
         assert.equal(lookup.table, weddingsTable);
-        assert.deepEqual(lookup.joins, [weddingMembersTable, usersTable]);
+        assert.deepEqual(lookup.joins, [usersTable, weddingMembersTable]);
       },
     );
   });
@@ -1398,7 +1423,7 @@ describe("sharing a wedding and setting the date", { concurrency: false }, () =>
   test("onboards a couple who haven't picked a date yet", async () => {
     const undated = { ...generatingWedding, weddingDate: null };
     await withHarness(
-      { selects: [[user], []], inserts: [[undated], []], updates: [[]] },
+      { selects: [[user], [], []], inserts: [[undated], []], updates: [[]] },
       [{ content: JSON.stringify({ weeks: timelineWeeks }) }],
       async ({ db: dbHarness, ai }) => {
         const response = await apiRequest("/timelines/generate", {
@@ -1582,7 +1607,7 @@ describe("sharing a wedding and setting the date", { concurrency: false }, () =>
   test("joins the partner with a code typed loosely", async () => {
     await withHarness(
       {
-        selects: [[partnerUser], [liveInvite], []],
+        selects: [[partnerUser], [liveInvite], [], []],
         updates: [[{ ...liveInvite, usedAt: createdAt }]],
         inserts: [[{ id: 2, weddingId: readyWedding.id, userId: partnerUser.id, role: "partner" }]],
       },
@@ -1665,7 +1690,7 @@ describe("sharing a wedding and setting the date", { concurrency: false }, () =>
   test("refuses a third person even with a live code", async () => {
     await withHarness(
       {
-        selects: [[partnerUser], [liveInvite], []],
+        selects: [[partnerUser], [liveInvite], [], []],
         updates: [[{ ...liveInvite, usedAt: createdAt }]],
         inserts: [[]],
       },
@@ -1732,6 +1757,66 @@ describe("sharing a wedding and setting the date", { concurrency: false }, () =>
         const deletes = dbHarness.operations.filter((operation) => operation.kind === "delete");
         assert.equal(deletes.length, 2);
         assert.ok(deletes.every((operation) => operation.table === weddingMembersTable));
+      },
+    );
+  });
+
+  test("the creator keeps owner access even without an owner membership row", async () => {
+    await withHarness(
+      {
+        selects: [[{ wedding: readyWedding, memberRole: null, userId: user.id }]],
+        deletes: [[], []],
+      },
+      [],
+      async ({ db: dbHarness }) => {
+        const response = await apiRequest(`/timelines/${readyWedding.id}`, {
+          method: "DELETE",
+        });
+        assert.equal(response.status, 200);
+        const deleted = dbHarness.operations
+          .filter((operation) => operation.kind === "delete")
+          .map((operation) => operation.table);
+        assert.deepEqual(deleted, [timelinesTable, weddingsTable]);
+      },
+    );
+  });
+
+  test("a code accepted while another request gave them a plan is refused", async () => {
+    const raced = { ...readyWedding, id: 12 };
+    await withHarness(
+      { selects: [[partnerUser], [liveInvite], [], [{ wedding: raced }]] },
+      [],
+      async ({ db: dbHarness }) => {
+        const response = await apiRequest("/invites/accept", {
+          method: "POST",
+          userId: partnerUser.clerkId,
+          body: { code: "ABCD-2345" },
+        });
+        assert.equal(response.status, 409);
+        assert.equal((response.body as { code: string }).code, "ALREADY_PLANNING");
+        const kinds = dbHarness.operations.map((operation) => operation.kind);
+        assert.ok(kinds.includes("execute"), "takes the per-user lock");
+        assert.ok(!kinds.includes("update") && !kinds.includes("insert"));
+      },
+    );
+  });
+
+  test("a second sign-up racing the first gets the plan that won", async () => {
+    await withHarness(
+      { selects: [[user], [], [{ wedding: generatingWedding }]] },
+      [],
+      async ({ db: dbHarness, ai }) => {
+        const response = await apiRequest("/timelines/generate", {
+          method: "POST",
+          body: { city: "Austin, TX", guestCount: 80, style: "standard" },
+        });
+        assert.equal(response.status, 202);
+        assert.deepEqual(response.body, {
+          weddingId: generatingWedding.id,
+          status: "generating",
+        });
+        assert.ok(!dbHarness.operations.some((operation) => operation.kind === "insert"));
+        assert.equal(ai.calls.length, 0);
       },
     );
   });

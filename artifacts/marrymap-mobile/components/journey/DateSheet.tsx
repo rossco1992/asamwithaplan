@@ -30,7 +30,9 @@ export function DateSheet({ visible, weddingDate, today, couple, onSaved, onClos
   const insets = useSafeAreaInsets();
   const [mode, setMode] = useState<Mode>('date');
   const [date, setDate] = useState<string | null>(weddingDate);
-  const [preview, setPreview] = useState<DatePreview | null>(null);
+  // The preview always names the choice it describes, so a slow or failed
+  // answer for an earlier pick is never shown for the current one.
+  const [preview, setPreview] = useState<{ for: string | null; data: DatePreview | null; failed: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -47,13 +49,12 @@ export function DateSheet({ visible, weddingDate, today, couple, onSaved, onClos
 
   // Ask what would move whenever the choice changes.
   useEffect(() => {
-    if (!visible || !changed) {
-      setPreview(null);
-      return;
-    }
+    setPreview(null);
+    if (!visible || !changed) return;
     let cancelled = false;
     couple.previewDate(next).then((result) => {
-      if (!cancelled && result.ok) setPreview(result.data);
+      if (cancelled) return;
+      setPreview({ for: next, data: result.ok ? result.data : null, failed: !result.ok });
     });
     return () => {
       cancelled = true;
@@ -61,8 +62,13 @@ export function DateSheet({ visible, weddingDate, today, couple, onSaved, onClos
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, next, changed]);
 
+  const previewReady = preview !== null && preview.for === next;
+  // Save once the couple has seen what this exact change does, or once we
+  // know the check couldn't run (then the sheet says so).
+  const canSave = changed && previewReady && !busy;
+
   const save = async () => {
-    if (!changed || busy) return;
+    if (!canSave) return;
     setBusy(true);
     setError(null);
     const result = await couple.setWeddingDate(next);
@@ -93,15 +99,15 @@ export function DateSheet({ visible, weddingDate, today, couple, onSaved, onClos
           </Text>
           <Pressable
             onPress={save}
-            disabled={!changed || busy}
+            disabled={!canSave}
             accessibilityRole="button"
-            accessibilityState={{ disabled: !changed || busy }}
+            accessibilityState={{ disabled: !canSave }}
             hitSlop={10}
           >
             {busy ? (
               <ActivityIndicator color={colors.accent} />
             ) : (
-              <Text style={[styles.toolbarText, styles.save, { color: changed ? colors.accent : colors.border }]}>
+              <Text style={[styles.toolbarText, styles.save, { color: canSave ? colors.accent : colors.border }]}>
                 Save
               </Text>
             )}
@@ -144,7 +150,13 @@ export function DateSheet({ visible, weddingDate, today, couple, onSaved, onClos
             </Text>
           )}
 
-          {preview ? <PreviewSummary preview={preview} /> : null}
+          {changed && !previewReady ? <ActivityIndicator color={colors.accent} /> : null}
+          {previewReady && preview.data ? <PreviewSummary preview={preview.data} /> : null}
+          {previewReady && preview.failed ? (
+            <Text style={[styles.help, { color: colors.mutedForeground }]}>
+              We couldn't check what moves right now. You can still save, and your journey updates to the new date.
+            </Text>
+          ) : null}
 
           {error ? (
             <View style={styles.errorRow}>

@@ -6,6 +6,7 @@ import { requireAuth } from "../middlewares/requireAuth";
 import {
   getAuthenticatedUser,
   getCurrentWeddingForUser,
+  lockUserPlanChoice,
 } from "../lib/authorization";
 import {
   AttemptLimiter,
@@ -28,6 +29,13 @@ const CODE_DIDNT_WORK = {
 };
 
 class PartnerSlotTaken extends Error {}
+class AlreadyPlanning extends Error {}
+
+const ALREADY_PLANNING = {
+  error:
+    "You already have a wedding plan. Delete it first if you'd rather join your partner's.",
+  code: "ALREADY_PLANNING",
+};
 
 // ── POST /api/invites/accept ──────────────────────────────────────────────────
 // The partner who received a code joins the plan. Wrong, used and expired
@@ -89,16 +97,19 @@ router.post("/accept", requireAuth, async (req, res) => {
     return;
   }
   if (current) {
-    res.status(409).json({
-      error:
-        "You already have a wedding plan. Delete it first if you'd rather join your partner's.",
-      code: "ALREADY_PLANNING",
-    });
+    res.status(409).json(ALREADY_PLANNING);
     return;
   }
 
   try {
     const joined = await db.transaction(async (tx) => {
+      // Recheck under the per-user lock that plan creation also takes, so two
+      // codes (or a code and a new plan) at once can't put them in two plans.
+      await lockUserPlanChoice(tx, user.id);
+      const now = await getCurrentWeddingForUser(user.id, tx);
+      if (now?.id === invite.weddingId) return true;
+      if (now) throw new AlreadyPlanning();
+
       const claimed = await tx
         .update(weddingInvitesTable)
         .set({ usedAt: new Date(), usedByUserId: user.id })
@@ -126,6 +137,10 @@ router.post("/accept", requireAuth, async (req, res) => {
       return;
     }
   } catch (error) {
+    if (error instanceof AlreadyPlanning) {
+      res.status(409).json(ALREADY_PLANNING);
+      return;
+    }
     if (error instanceof PartnerSlotTaken) {
       res.status(409).json({
         error: "Two partners have already joined this plan.",
