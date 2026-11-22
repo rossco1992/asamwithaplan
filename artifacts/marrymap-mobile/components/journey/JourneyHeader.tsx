@@ -52,6 +52,9 @@ interface Props {
   onAdd: () => void;
   onEditDate: () => void;
   onOpenCouple: () => void;
+  onOpenReminders: () => void;
+  /** This phone has milestone reminders on. */
+  remindersOn: boolean;
   /** "RS" once both partners are in; shown on the couple button. */
   coupleInitials: string;
   partnerJoined: boolean;
@@ -64,6 +67,8 @@ export function JourneyHeader({
   onAdd,
   onEditDate,
   onOpenCouple,
+  onOpenReminders,
+  remindersOn,
   coupleInitials,
   partnerJoined,
 }: Props) {
@@ -98,6 +103,19 @@ export function JourneyHeader({
           </Text>
         </Pressable>
         <ProgressRing percent={progress.percent} />
+        <Pressable
+          onPress={onOpenReminders}
+          accessibilityRole="button"
+          accessibilityLabel={remindersOn ? 'Reminders are on' : 'Turn on reminders'}
+          hitSlop={8}
+          style={({ pressed }) => [
+            styles.bellButton,
+            { borderColor: colors.border, backgroundColor: colors.card },
+            pressed && { opacity: 0.8 },
+          ]}
+        >
+          <Ionicons name={remindersOn ? 'notifications' : 'notifications-outline'} size={18} color={colors.primary} />
+        </Pressable>
       </View>
 
       <View style={styles.controls}>
@@ -192,5 +210,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   coupleText: { fontFamily: fonts.serifBold, fontSize: 13, letterSpacing: 0.5 },
+  bellButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-start',
+  },
   addButton: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
 });

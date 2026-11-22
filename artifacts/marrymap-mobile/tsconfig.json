@@ -19,5 +19,9 @@
     {
       "path": "../../lib/api-client-react"
     }
+  ],
+  "exclude": [
+    "**/*.test.ts",
+    "node_modules"
   ]
 }
