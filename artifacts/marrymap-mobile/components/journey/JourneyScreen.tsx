@@ -13,6 +13,9 @@ import { MilestoneSheet } from '@/components/journey/MilestoneSheet';
 import { AddMilestoneSheet } from '@/components/journey/AddMilestoneSheet';
 import { DateSheet } from '@/components/journey/DateSheet';
 import { CoupleSheet } from '@/components/journey/CoupleSheet';
+import { RemindersSheet } from '@/components/journey/RemindersSheet';
+import { useReminders } from '@/hooks/useReminders';
+import { remindableCount } from '@/lib/reminders';
 import { useCouple } from '@/hooks/useCouple';
 import { coupleInitials, partnerOf } from '@/lib/couple';
 import type { JourneyNode, PhaseKey } from '@/lib/journey';
@@ -41,6 +44,9 @@ export function JourneyScreen({ wedding, timeline, initials, onWeddingDateChange
   const [view, setView] = useState<JourneyView>('map');
   const [openId, setOpenId] = useState<number | null>(null);
   const [adding, setAdding] = useState<{ phase: PhaseKey | null } | null>(null);
+  const [remindersOpen, setRemindersOpen] = useState(false);
+  // A tap on a reminder opens its milestone; the sheet shows once the journey has loaded.
+  const reminders = useReminders(state.kind === 'ready' ? state.journey : null, setOpenId);
 
   const openMilestone = useCallback((node: JourneyNode) => {
     Haptics.selectionAsync();
@@ -92,6 +98,8 @@ export function JourneyScreen({ wedding, timeline, initials, onWeddingDateChange
         onAdd={() => setAdding({ phase: null })}
         onEditDate={() => setEditingDate(true)}
         onOpenCouple={() => setCoupleOpen(true)}
+        onOpenReminders={() => setRemindersOpen(true)}
+        remindersOn={reminders.status === 'on'}
         coupleInitials={mapInitials}
         partnerJoined={partnerJoined}
       />
@@ -122,6 +130,13 @@ export function JourneyScreen({ wedding, timeline, initials, onWeddingDateChange
           actions.refresh();
         }}
         onClose={() => setEditingDate(false)}
+      />
+      <RemindersSheet
+        visible={remindersOpen}
+        reminders={reminders}
+        remindable={remindableCount(journey)}
+        hasWeddingDate={journey.weddingDate !== null}
+        onClose={() => setRemindersOpen(false)}
       />
       <CoupleSheet visible={coupleOpen} couple={couple} onLeft={onLeft} onClose={() => setCoupleOpen(false)} />
     </View>

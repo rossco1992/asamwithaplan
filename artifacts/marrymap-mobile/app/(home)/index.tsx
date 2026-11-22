@@ -17,6 +17,7 @@ import { OnboardingForm } from '@/components/OnboardingForm';
 import { JoinPlanForm } from '@/components/JoinPlanForm';
 import { GeneratingState } from '@/components/GeneratingState';
 import { JourneyScreen } from '@/components/journey/JourneyScreen';
+import { cancelMilestoneReminders } from '@/hooks/useReminders';
 import { initialsFor } from '@/lib/journey';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
@@ -112,6 +113,8 @@ export default function HomeScreen() {
   const handleSignOut = useCallback(async () => {
     Haptics.selectionAsync();
     await AsyncStorage.removeItem(LEGACY_WEDDING_ID_KEY);
+    // The next person to sign in on this phone shouldn't get this couple's reminders.
+    await cancelMilestoneReminders({ forget: true });
     await signOut();
     router.replace('/(auth)/sign-in');
   }, [signOut, router]);
@@ -150,7 +153,10 @@ export default function HomeScreen() {
           timeline={state.timeline}
           initials={initialsFor(user?.fullName ?? displayName)}
           onWeddingDateChange={handleWeddingDateChange}
-          onLeft={() => setState({ kind: 'form' })}
+          onLeft={() => {
+            cancelMilestoneReminders();
+            setState({ kind: 'form' });
+          }}
         />
       )}
     </View>
