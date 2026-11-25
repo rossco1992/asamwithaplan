@@ -55,6 +55,8 @@ interface Props {
   onOpenReminders: () => void;
   /** This phone has milestone reminders on. */
   remindersOn: boolean;
+  /** False in the web app, which can't schedule reminders. */
+  remindersAvailable: boolean;
   /** "RS" once both partners are in; shown on the couple button. */
   coupleInitials: string;
   partnerJoined: boolean;
@@ -69,6 +71,7 @@ export function JourneyHeader({
   onOpenCouple,
   onOpenReminders,
   remindersOn,
+  remindersAvailable,
   coupleInitials,
   partnerJoined,
 }: Props) {
@@ -103,19 +106,21 @@ export function JourneyHeader({
           </Text>
         </Pressable>
         <ProgressRing percent={progress.percent} />
-        <Pressable
-          onPress={onOpenReminders}
-          accessibilityRole="button"
-          accessibilityLabel={remindersOn ? 'Reminders are on' : 'Turn on reminders'}
-          hitSlop={8}
-          style={({ pressed }) => [
-            styles.bellButton,
-            { borderColor: colors.border, backgroundColor: colors.card },
-            pressed && { opacity: 0.8 },
-          ]}
-        >
-          <Ionicons name={remindersOn ? 'notifications' : 'notifications-outline'} size={18} color={colors.primary} />
-        </Pressable>
+        {remindersAvailable ? (
+          <Pressable
+            onPress={onOpenReminders}
+            accessibilityRole="button"
+            accessibilityLabel={remindersOn ? 'Reminders are on' : 'Turn on reminders'}
+            hitSlop={8}
+            style={({ pressed }) => [
+              styles.bellButton,
+              { borderColor: colors.border, backgroundColor: colors.card },
+              pressed && { opacity: 0.8 },
+            ]}
+          >
+            <Ionicons name={remindersOn ? 'notifications' : 'notifications-outline'} size={18} color={colors.primary} />
+          </Pressable>
+        ) : null}
       </View>
 
       <View style={styles.controls}>

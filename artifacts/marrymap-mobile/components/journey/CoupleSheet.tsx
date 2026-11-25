@@ -7,7 +7,6 @@ import {
   Pressable,
   ScrollView,
   ActivityIndicator,
-  Alert,
   Share,
   Platform,
 } from 'react-native';
@@ -19,6 +18,7 @@ import { fonts } from '@/constants/colors';
 import { formatDate } from '@/lib/journey';
 import { inviteMessage, partnerOf, type Invite } from '@/lib/couple';
 import type { CoupleActions } from '@/hooks/useCouple';
+import { confirmAction } from '@/lib/confirm';
 
 interface Props {
   visible: boolean;
@@ -79,30 +79,24 @@ export function CoupleSheet({ visible, couple, onLeft, onClose }: Props) {
     if (!partner || !you) return;
     const leaving = you.role === 'partner';
     const name = partner.firstName ?? 'your partner';
-    Alert.alert(
-      leaving ? 'Leave this plan?' : `Remove ${name}?`,
-      leaving
+    confirmAction({
+      title: leaving ? 'Leave this plan?' : `Remove ${name}?`,
+      message: leaving
         ? "You'll lose access to this wedding plan. Your partner keeps everything."
         : `${name} will lose access to this wedding plan. You keep everything, and you can invite them again.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: leaving ? 'Leave' : 'Remove',
-          style: 'destructive',
-          onPress: async () => {
-            const result = await couple.removeMember(leaving ? you.id : partner.id);
-            if (!result.ok) {
-              setError(result.error);
-              return;
-            }
-            if (leaving) {
-              onClose();
-              onLeft();
-            }
-          },
-        },
-      ],
-    );
+      confirmLabel: leaving ? 'Leave' : 'Remove',
+      onConfirm: async () => {
+        const result = await couple.removeMember(leaving ? you.id : partner.id);
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
+        if (leaving) {
+          onClose();
+          onLeft();
+        }
+      },
+    });
   };
 
   return (

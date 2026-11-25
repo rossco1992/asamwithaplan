@@ -7,7 +7,6 @@ import {
   Pressable,
   ScrollView,
   TextInput,
-  Alert,
   ActivityIndicator,
   Platform,
 } from 'react-native';
@@ -18,6 +17,7 @@ import { useColors } from '@/hooks/useColors';
 import { fonts } from '@/constants/colors';
 import { formatLongDate, SCHEDULABLE_PHASES, stateLabel, type JourneyNode } from '@/lib/journey';
 import type { JourneyActions } from '@/hooks/useJourney';
+import { confirmAction } from '@/lib/confirm';
 
 interface Props {
   node: JourneyNode | null;
@@ -57,16 +57,14 @@ export function MilestoneSheet({ node, actions, error, onClose }: Props) {
     run(() => actions.setMilestoneStatus(node.id, node.status === 'skipped' ? 'todo' : 'skipped'));
 
   const confirmDelete = () => {
-    Alert.alert('Delete this milestone?', `"${node.title}" and its tasks will be removed.`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          if (await run(() => actions.deleteMilestone(node.id))) onClose();
-        },
+    confirmAction({
+      title: 'Delete this milestone?',
+      message: `"${node.title}" and its tasks will be removed.`,
+      confirmLabel: 'Delete',
+      onConfirm: async () => {
+        if (await run(() => actions.deleteMilestone(node.id))) onClose();
       },
-    ]);
+    });
   };
 
   const addTask = async () => {

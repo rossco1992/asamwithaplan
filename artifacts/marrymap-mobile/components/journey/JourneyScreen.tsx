@@ -100,6 +100,7 @@ export function JourneyScreen({ wedding, timeline, initials, onWeddingDateChange
         onOpenCouple={() => setCoupleOpen(true)}
         onOpenReminders={() => setRemindersOpen(true)}
         remindersOn={reminders.status === 'on'}
+        remindersAvailable={reminders.status !== 'unsupported'}
         coupleInitials={mapInitials}
         partnerJoined={partnerJoined}
       />
