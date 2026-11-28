@@ -10,7 +10,7 @@ import { formatDate, parseIsoDate, type Journey, type JourneyNode } from './jour
 export type ReminderKind = 'week-before' | 'due-day';
 
 export interface PlannedReminder {
-  /** Stable across runs, so the same plan never reschedules. */
+  /** Stable across runs and time zones; planSignature adds the fire time. */
   key: string;
   kind: ReminderKind;
   /** The local day the reminder fires, YYYY-MM-DD. */
@@ -129,9 +129,14 @@ export function planReminders(journey: Journey, options: PlanOptions = {}): Plan
   return planned.slice(0, limit);
 }
 
-/** One string per plan, so a phone can tell when nothing changed and skip rescheduling. */
+/**
+ * One string per plan, so a phone can tell when nothing changed and skip
+ * rescheduling. It includes the exact moment each reminder fires: a reminder
+ * is scheduled for a fixed instant, so after a time zone change the same plan
+ * fires at the wrong local hour until it is scheduled again.
+ */
 export function planSignature(planned: PlannedReminder[], hour: number = REMINDER_HOUR): string {
-  return `${hour}|${planned.map((reminder) => reminder.key).join('|')}`;
+  return `${hour}|${planned.map((reminder) => `${reminder.key}@${reminder.fireAt.getTime()}`).join('|')}`;
 }
 
 /** How many open milestones have a date and so can be reminded about. */

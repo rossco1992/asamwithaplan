@@ -4,6 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import type { Journey } from '@/lib/journey';
 import { planReminders, planSignature, REMINDER_HOUR, type PlannedReminder } from '@/lib/reminders';
+import { createReminderSync } from '@/lib/reminderSync';
 
 const ENABLED_KEY = 'reminders:enabled';
 const SIGNATURE_KEY = 'reminders:signature';
@@ -46,29 +47,11 @@ async function ourScheduled(): Promise<Notifications.NotificationRequest[]> {
   return all.filter((request) => request.content.data?.source === SOURCE);
 }
 
-/** Removes every milestone reminder from this phone. Safe to call at any time. */
-export async function cancelMilestoneReminders(options: { forget?: boolean } = {}): Promise<void> {
-  if (!supported) return;
-  try {
-    const scheduled = await ourScheduled();
-    await Promise.all(scheduled.map((request) => Notifications.cancelScheduledNotificationAsync(request.identifier)));
-    await AsyncStorage.removeItem(SIGNATURE_KEY);
-    if (options.forget) await AsyncStorage.removeItem(ENABLED_KEY);
-  } catch {
-    // Nothing to clean up, or the OS refused; either way there's nothing more to do.
-  }
-}
-
-async function schedule(planned: PlannedReminder[]): Promise<void> {
-  if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync(CHANNEL_ID, {
-      name: 'Milestone reminders',
-      importance: Notifications.AndroidImportance.DEFAULT,
-    });
-  }
-  const existing = await ourScheduled();
-  await Promise.all(existing.map((request) => Notifications.cancelScheduledNotificationAsync(request.identifier)));
-  for (const reminder of planned) {
+/** The phone's side of the reminder sync: expo-notifications and AsyncStorage. */
+const reminderSync = createReminderSync({
+  scheduledIds: async () => (await ourScheduled()).map((request) => request.identifier),
+  cancel: (id) => Notifications.cancelScheduledNotificationAsync(id),
+  schedule: async (reminder: PlannedReminder) => {
     await Notifications.scheduleNotificationAsync({
       content: {
         title: reminder.title,
@@ -81,6 +64,34 @@ async function schedule(planned: PlannedReminder[]): Promise<void> {
         ...(Platform.OS === 'android' ? { channelId: CHANNEL_ID } : {}),
       },
     });
+  },
+  readSignature: () => AsyncStorage.getItem(SIGNATURE_KEY),
+  writeSignature: async (signature) => {
+    if (signature === null) await AsyncStorage.removeItem(SIGNATURE_KEY);
+    else await AsyncStorage.setItem(SIGNATURE_KEY, signature);
+  },
+  isEnabled: readEnabled,
+  forgetEnabled: () => AsyncStorage.removeItem(ENABLED_KEY),
+  prepare: async () => {
+    if (Platform.OS !== 'android') return;
+    await Notifications.setNotificationChannelAsync(CHANNEL_ID, {
+      name: 'Milestone reminders',
+      importance: Notifications.AndroidImportance.DEFAULT,
+    });
+  },
+});
+
+/**
+ * Removes every milestone reminder from this phone. Safe to call at any time.
+ * It also stops any rescheduling that is still running or waiting, so nothing
+ * comes back after it.
+ */
+export async function cancelMilestoneReminders(options: { forget?: boolean } = {}): Promise<void> {
+  if (!supported) return;
+  try {
+    await reminderSync.cancel(options);
+  } catch {
+    // Nothing to clean up, or the OS refused; either way there's nothing more to do.
   }
 }
 
@@ -92,7 +103,6 @@ async function schedule(planned: PlannedReminder[]): Promise<void> {
 export function useReminders(journey: Journey | null, onOpenMilestone: (milestoneId: number) => void) {
   const [status, setStatus] = useState<ReminderStatus>(supported ? 'loading' : 'unsupported');
   const [scheduledCount, setScheduledCount] = useState(0);
-  const running = useRef<Promise<unknown>>(Promise.resolve());
   const openRef = useRef(onOpenMilestone);
   openRef.current = onOpenMilestone;
 
@@ -117,20 +127,24 @@ export function useReminders(journey: Journey | null, onOpenMilestone: (mileston
     };
   }, []);
 
-  // Reschedule whenever the plan for this phone changes.
+  // Reschedule whenever the plan for this phone changes. Only a newer plan, or
+  // an explicit cancel (switching off, signing out, leaving the plan), calls
+  // off a run that hasn't finished. A journey that briefly fails to load, or
+  // the screen going away, lets the last plan finish rather than leaving the
+  // phone with only part of it.
+  const latestPlan = useRef(0);
   useEffect(() => {
     if (status !== 'on' || !journey) return;
     const planned = planReminders(journey);
     const signature = planSignature(planned, REMINDER_HOUR);
-    const run = async () => {
-      const [saved, existing] = await Promise.all([AsyncStorage.getItem(SIGNATURE_KEY), ourScheduled()]);
-      if (saved !== signature || existing.length !== planned.length) {
-        await schedule(planned);
-        await AsyncStorage.setItem(SIGNATURE_KEY, signature);
-      }
-      setScheduledCount(planned.length);
-    };
-    running.current = running.current.then(run, run).catch(() => undefined);
+    const plan = ++latestPlan.current;
+    const isLatest = () => plan === latestPlan.current;
+    reminderSync
+      .sync(planned, signature, isLatest)
+      .then((outcome) => {
+        if (isLatest() && outcome !== 'stopped') setScheduledCount(planned.length);
+      })
+      .catch(() => undefined);
   }, [status, journey]);
 
   // A tap on a reminder opens its milestone, whether the app was running or not.

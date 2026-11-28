@@ -149,3 +149,22 @@ test('a couple with no date still gets reminders for milestones with their own d
   assert.equal(remindableCount(j), 1);
   assert.equal(planReminders(j, { now }).length, 2);
 });
+
+test('the signature changes when a time zone change moves the fire times', () => {
+  const saved = process.env.TZ;
+  try {
+    const plan = journey([node(1, 'Book the venue', '2027-03-20')]);
+    process.env.TZ = 'America/New_York';
+    const inNewYork = planReminders(plan, { now: new Date(Date.UTC(2027, 2, 1, 12)) });
+    process.env.TZ = 'America/Los_Angeles';
+    const inLosAngeles = planReminders(plan, { now: new Date(Date.UTC(2027, 2, 1, 12)) });
+
+    // Same reminders on the same days, but 9 AM is a different instant.
+    assert.deepEqual(inLosAngeles.map((r) => r.key), inNewYork.map((r) => r.key));
+    assert.notEqual(inLosAngeles[0].fireAt.getTime(), inNewYork[0].fireAt.getTime());
+    assert.notEqual(planSignature(inLosAngeles), planSignature(inNewYork));
+  } finally {
+    if (saved === undefined) delete process.env.TZ;
+    else process.env.TZ = saved;
+  }
+});
