@@ -1,7 +1,8 @@
 import { useAuth } from '@clerk/expo';
 
 const domain = process.env.EXPO_PUBLIC_DOMAIN;
-export const apiBase = domain ? `https://${domain}/api` : '';
+// With no API domain (the web build served next to the API), call /api on the same site.
+export const apiBase = domain ? `https://${domain}/api` : '/api';
 
 // Discriminated union: check `result.ok` to narrow data/error
 export type ApiResult<T> =

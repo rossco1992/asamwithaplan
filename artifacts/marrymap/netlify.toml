@@ -1,5 +1,7 @@
 [build]
-  command = "pnpm --filter @workspace/marrymap build"
+  # The web beta at /, the mobile app's web build (an installable PWA) at /app/,
+  # and this deploy's own addresses for the API's sign-in check.
+  command = "pnpm --filter @workspace/marrymap build && pnpm --filter @workspace/marrymap-mobile build:pwa \"$PWD/artifacts/marrymap/dist/public/app\" && node artifacts/marrymap/netlify/write-deploy-origins.mjs"
   publish = "artifacts/marrymap/dist/public"
 
 [build.environment]
@@ -18,6 +20,12 @@
   to = "/.netlify/functions/api/:splat"
   status = 200
   force = true
+
+# The PWA routes in the browser, so every /app/ path loads its page.
+[[redirects]]
+  from = "/app/*"
+  to = "/app/index.html"
+  status = 200
 
 [[redirects]]
   from = "/*"
