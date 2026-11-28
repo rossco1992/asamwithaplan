@@ -127,22 +127,24 @@ export function useReminders(journey: Journey | null, onOpenMilestone: (mileston
     };
   }, []);
 
-  // Reschedule whenever the plan for this phone changes. A newer plan, or the
-  // screen going away, calls off a run that hasn't finished.
+  // Reschedule whenever the plan for this phone changes. Only a newer plan, or
+  // an explicit cancel (switching off, signing out, leaving the plan), calls
+  // off a run that hasn't finished. A journey that briefly fails to load, or
+  // the screen going away, lets the last plan finish rather than leaving the
+  // phone with only part of it.
+  const latestPlan = useRef(0);
   useEffect(() => {
     if (status !== 'on' || !journey) return;
     const planned = planReminders(journey);
     const signature = planSignature(planned, REMINDER_HOUR);
-    let live = true;
+    const plan = ++latestPlan.current;
+    const isLatest = () => plan === latestPlan.current;
     reminderSync
-      .sync(planned, signature, () => live)
+      .sync(planned, signature, isLatest)
       .then((outcome) => {
-        if (live && outcome !== 'stopped') setScheduledCount(planned.length);
+        if (isLatest() && outcome !== 'stopped') setScheduledCount(planned.length);
       })
       .catch(() => undefined);
-    return () => {
-      live = false;
-    };
   }, [status, journey]);
 
   // A tap on a reminder opens its milestone, whether the app was running or not.
